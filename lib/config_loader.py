@@ -41,6 +41,45 @@ def load_config(config_file: str) -> Dict[str, Any]:
         config = yaml.safe_load(f)
     return _substitute_env_vars(config)
 
+def _validate_primary_keys(source_name: str, source_config: Dict[str, Any]) -> None:
+    """
+    Validate primary_keys configuration if present
+
+    Ensures:
+    - primary_keys is a dictionary
+    - Each value is a non-empty list of strings
+    """
+    if 'primary_keys' not in source_config:
+        return  # Optional section
+
+    primary_keys = source_config['primary_keys']
+
+    if not isinstance(primary_keys, dict):
+        raise ValueError(
+            f"Source '{source_name}': 'primary_keys' must be a dictionary, got {type(primary_keys).__name__}"
+        )
+
+    for table_name, pk_columns in primary_keys.items():
+        if not isinstance(pk_columns, list):
+            raise ValueError(
+                f"Source '{source_name}', table '{table_name}': "
+                f"primary key columns must be a list, got {type(pk_columns).__name__}"
+            )
+
+        if len(pk_columns) == 0:
+            raise ValueError(
+                f"Source '{source_name}', table '{table_name}': "
+                f"primary key columns list cannot be empty"
+            )
+
+        for column in pk_columns:
+            if not isinstance(column, str):
+                raise ValueError(
+                    f"Source '{source_name}', table '{table_name}': "
+                    f"column names must be strings, got {type(column).__name__}"
+                )
+
+
 def get_source_config(source_name: str) -> Dict[str, Any]:
     """Get configuration for a specific source"""
     config_dir = os.environ.get('CONFIG_DIR')
@@ -50,7 +89,13 @@ def get_source_config(source_name: str) -> Dict[str, Any]:
     config = load_config(f'{config_dir}/sources.yaml')
     if source_name not in config['sources']:
         raise ValueError(f"Source '{source_name}' not found in configuration")
-    return config['sources'][source_name]
+
+    source_config = config['sources'][source_name]
+
+    # Validate primary_keys section if present
+    _validate_primary_keys(source_name, source_config)
+
+    return source_config
 
 def get_kafka_config(cluster_name: str = 'primary') -> Dict[str, Any]:
     """Get Kafka cluster configuration"""

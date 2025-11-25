@@ -48,16 +48,53 @@ class PostgresTableExtractor(BaseTableExtractor):
     
     def get_row_count(self, table_name):
         """Get row count for table"""
-        
+
         query = f"SELECT COUNT(*) as cnt FROM {self.schema}.{table_name}"
-        
+
         try:
             df = self._read_jdbc(f"({query})")
             return int(df.first()[0])
         except Exception as e:
             logger.warning(f"Could not count {table_name}: {e}")
             return None
-    
+
+    def get_primary_key_columns(self, table_name):
+        """
+        Get primary key columns for a Postgres table
+
+        Queries information_schema to discover PK columns in order
+
+        Returns:
+            list: Primary key column names in order, or None if no PK found
+        """
+
+        query = f"""
+            (SELECT kcu.column_name
+             FROM information_schema.table_constraints tc
+             JOIN information_schema.key_column_usage kcu
+               ON tc.constraint_name = kcu.constraint_name
+               AND tc.table_schema = kcu.table_schema
+             WHERE tc.table_schema = '{self.schema.lower()}'
+               AND tc.table_name = '{table_name.lower()}'
+               AND tc.constraint_type = 'PRIMARY KEY'
+             ORDER BY kcu.ordinal_position)
+        """
+
+        try:
+            df = self._read_jdbc(query)
+            pk_cols = [row[0] for row in df.collect()]
+
+            if pk_cols:
+                logger.info(f"{table_name}: found primary key columns: {', '.join(pk_cols)}")
+                return pk_cols
+            else:
+                logger.warning(f"{table_name}: no primary key found")
+                return None
+
+        except Exception as e:
+            logger.error(f"{table_name}: could not determine primary key: {e}")
+            return None
+
     def extract_table(self, table_name, scn_lsn, num_partitions=8):
         """
         Extract Postgres table
@@ -70,8 +107,14 @@ class PostgresTableExtractor(BaseTableExtractor):
 
         metadata = {
             'empty': False,
-            'persisted': False
+            'persisted': False,
+            'primary_keys': []
         }
+
+        # Discover primary keys
+        pk_cols = self.get_primary_key_columns(table_name)
+        if pk_cols:
+            metadata['primary_keys'] = pk_cols
 
         # Build query
         base_query = self.build_query(table_name)

@@ -133,6 +133,9 @@ def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, names
                 table_name, scn_lsn, parallel_tables
             )
 
+            # Extract primary keys from metadata
+            primary_keys = metadata.get('primary_keys', [])
+
             # Track tables with LONG columns (Oracle only)
             if metadata.get('long_columns'):
                 with write_lock:
@@ -160,6 +163,7 @@ def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, names
                         tracker.record_initial_load_complete(
                             table_name=table_name,
                             record_count=0,
+                            primary_keys=primary_keys,
                             oracle_scn=scn_lsn['oracle_scn'] + 1 if scn_lsn['oracle_scn'] else None,
                             postgres_lsn=scn_lsn['postgres_lsn']
                         )
@@ -172,6 +176,7 @@ def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, names
                 tracker.record_initial_load_start(
                     table_name=table_name,
                     source_db=jdbc_config['url'].split('@')[-1] if '@' in jdbc_config['url'] else jdbc_config['url'],
+                    primary_keys=primary_keys,
                     oracle_scn=scn_lsn['oracle_scn'],
                     postgres_lsn=scn_lsn['postgres_lsn']
                 )
@@ -189,6 +194,7 @@ def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, names
                 tracker.record_initial_load_complete(
                     table_name=table_name,
                     record_count=record_count,
+                    primary_keys=primary_keys,
                     oracle_scn=scn_lsn['oracle_scn'] + 1 if scn_lsn['oracle_scn'] else None,
                     postgres_lsn=scn_lsn['postgres_lsn']
                 )

@@ -56,6 +56,17 @@ sources:
       retry_backoff: 2                # Exponential backoff multiplier
       large_table_threshold: 100000   # Rows - triggers disk persistence
 
+    # Optional: Override primary keys for specific tables
+    # By default, primary keys are auto-discovered from database metadata
+    # Use this section ONLY when:
+    #   - Auto-discovery fails (table has no PK defined in database)
+    #   - You need to use a different set of columns for CDC merge operations
+    #   - You want to use a composite key for merge/delete operations
+    # primary_keys:
+    #   TABLE_NAME: [COLUMN1]              # Single column primary key
+    #   OTHER_TABLE: [COL1, COL2]          # Composite key
+    #   NO_PK_TABLE: [UNIQUE_ID]           # Override for table without PK
+
   prod_aurora_db1:
     database_type: postgres
     kafka_topic_prefix: prod.aurora.db1

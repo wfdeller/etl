@@ -150,14 +150,20 @@ class OracleTableExtractor(BaseTableExtractor):
             'long_columns': [],
             'excluded_columns': [],
             'empty': False,
-            'persisted': False
+            'persisted': False,
+            'primary_keys': []
         }
-        
+
         scn = scn_lsn.get('oracle_scn')
-        
+
+        # Discover primary keys
+        pk_cols = self.get_primary_key_columns(table_name)
+        if pk_cols:
+            metadata['primary_keys'] = pk_cols
+
         # Check for LONG columns
         long_columns = self.has_long_columns(table_name)
-        
+
         if long_columns:
             metadata['long_columns'] = long_columns
 
@@ -169,7 +175,7 @@ class OracleTableExtractor(BaseTableExtractor):
             else:  # exclude (default)
                 logger.warning(f"{table_name}: EXCLUDING LONG columns: {', '.join(long_columns)}")
                 metadata['excluded_columns'] = long_columns
-        
+
         # Build query
         base_query = self.build_query(table_name, scn, exclude_long_columns=long_columns)
         

@@ -6,7 +6,7 @@ Manages Iceberg table for tracking load progress and CDC position
 import logging
 from datetime import datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType, TimestampType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType, TimestampType, ArrayType
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class CDCStatusTracker:
     """
     Tracks CDC status in Iceberg table
-    
+
     Table schema:
     - table_name: string (primary key)
     - load_status: string (in_progress, completed, failed)
@@ -22,6 +22,7 @@ class CDCStatusTracker:
     - initial_load_end: timestamp
     - record_count: int
     - source_db: string
+    - primary_keys: array<string> (discovered primary key columns)
     - oracle_scn: int (for Oracle sources)
     - postgres_lsn: string (for Postgres sources)
     - last_processed_timestamp: timestamp
@@ -63,6 +64,7 @@ class CDCStatusTracker:
                 StructField('initial_load_end', TimestampType(), True),
                 StructField('record_count', IntegerType(), True),
                 StructField('source_db', StringType(), True),
+                StructField('primary_keys', ArrayType(StringType()), True),
                 StructField('oracle_scn', LongType(), True),  # Changed to LongType for large SCN values
                 StructField('postgres_lsn', StringType(), True),
                 StructField('last_processed_timestamp', TimestampType(), True),
@@ -77,7 +79,7 @@ class CDCStatusTracker:
             
             logger.info(f"Created status table {self.status_table}")
     
-    def record_initial_load_start(self, table_name: str, source_db: str, oracle_scn: int = None, postgres_lsn: str = None):
+    def record_initial_load_start(self, table_name: str, source_db: str, primary_keys: list = None, oracle_scn: int = None, postgres_lsn: str = None):
         """Record the start of initial load for a table"""
 
         status_data = [{
@@ -87,6 +89,7 @@ class CDCStatusTracker:
             'initial_load_end': None,
             'record_count': None,
             'source_db': source_db,
+            'primary_keys': primary_keys if primary_keys else [],
             'oracle_scn': oracle_scn,
             'postgres_lsn': postgres_lsn,
             'last_processed_timestamp': None,
@@ -101,6 +104,7 @@ class CDCStatusTracker:
             StructField('initial_load_end', TimestampType(), True),
             StructField('record_count', IntegerType(), True),
             StructField('source_db', StringType(), True),
+            StructField('primary_keys', ArrayType(StringType()), True),
             StructField('oracle_scn', LongType(), True),  # Changed to LongType for large SCN values
             StructField('postgres_lsn', StringType(), True),
             StructField('last_processed_timestamp', TimestampType(), True),
@@ -123,10 +127,10 @@ class CDCStatusTracker:
         logger.info(f"Recorded initial load start for {table_name} (SCN: {oracle_scn}, LSN: {postgres_lsn})")
 
 
-    def record_initial_load_complete(self, table_name: str, record_count: int, oracle_scn: int = None, postgres_lsn: str = None):
+    def record_initial_load_complete(self, table_name: str, record_count: int, primary_keys: list = None, oracle_scn: int = None, postgres_lsn: str = None):
         """Record completion of initial load for a table"""
 
-        # First get existing record to preserve initial_load_start
+        # First get existing record to preserve initial_load_start and primary_keys
         try:
             from pyspark.sql.functions import col
             existing = self.spark.table(self.status_table) \
@@ -138,12 +142,18 @@ class CDCStatusTracker:
             if existing:
                 initial_start = existing['initial_load_start']
                 source_db = existing['source_db']
+                existing_pks = existing.get('primary_keys', [])
             else:
                 initial_start = None
                 source_db = None
+                existing_pks = []
         except:
             initial_start = None
             source_db = None
+            existing_pks = []
+
+        # Use provided primary_keys if available, otherwise preserve existing
+        final_pks = primary_keys if primary_keys is not None else existing_pks
 
         status_data = [{
             'table_name': table_name,
@@ -152,6 +162,7 @@ class CDCStatusTracker:
             'initial_load_end': datetime.now(),
             'record_count': record_count,
             'source_db': source_db,
+            'primary_keys': final_pks if final_pks else [],
             'oracle_scn': oracle_scn,
             'postgres_lsn': postgres_lsn,
             'last_processed_timestamp': None,
@@ -166,6 +177,7 @@ class CDCStatusTracker:
             StructField('initial_load_end', TimestampType(), True),
             StructField('record_count', IntegerType(), True),
             StructField('source_db', StringType(), True),
+            StructField('primary_keys', ArrayType(StringType()), True),
             StructField('oracle_scn', LongType(), True),  # Changed to LongType for large SCN values
             StructField('postgres_lsn', StringType(), True),
             StructField('last_processed_timestamp', TimestampType(), True),

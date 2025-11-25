@@ -103,27 +103,57 @@ def get_table_scn_map(tracker: CDCStatusTracker) -> Dict[str, int]:
     """
     Get a mapping of table_name -> SCN for all completed tables
     This allows per-table SCN tracking for filtering duplicates
-    
+
     Returns:
         dict: {table_name: scn}
     """
-    
+
     try:
         status_df = tracker.get_status()
         completed_df = status_df.filter(status_df.load_status == 'completed')
-        
+
         scn_map = {}
         for row in completed_df.collect():
             if row['oracle_scn'] is not None:
                 scn_map[row['table_name']] = row['oracle_scn']
             elif row['postgres_lsn'] is not None:
                 scn_map[row['table_name']] = row['postgres_lsn']
-        
+
         logger.info(f"Loaded SCN/LSN map for {len(scn_map)} tables")
         return scn_map
-    
+
     except Exception as e:
         logger.error(f"Error loading SCN map: {e}")
+        return {}
+
+
+def get_primary_keys_map(tracker: CDCStatusTracker) -> Dict[str, list]:
+    """
+    Get a mapping of table_name -> primary_keys for all completed tables
+    This allows dynamic PK-based MERGE/DELETE operations instead of hardcoding ROW_ID
+
+    Returns:
+        dict: {table_name: [pk_column1, pk_column2, ...]}
+    """
+
+    try:
+        status_df = tracker.get_status()
+        completed_df = status_df.filter(status_df.load_status == 'completed')
+
+        pk_map = {}
+        for row in completed_df.collect():
+            table_name = row['table_name']
+            primary_keys = row.get('primary_keys', [])
+
+            # Only store if we have valid primary keys
+            if primary_keys and len(primary_keys) > 0:
+                pk_map[table_name] = primary_keys
+
+        logger.info(f"Loaded primary keys for {len(pk_map)} tables")
+        return pk_map
+
+    except Exception as e:
+        logger.error(f"Error loading primary keys map: {e}")
         return {}
 
 
@@ -132,7 +162,7 @@ def get_table_scn_map(tracker: CDCStatusTracker) -> Dict[str, int]:
 def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, namespace: str, table_name: str,
                     operation: str, before: dict, after: dict,
                     tracker: CDCStatusTracker = None, db_type: str = None,
-                    event_scn: int = None):
+                    event_scn: int = None, primary_keys_map: Dict[str, list] = None):
     """
     Apply a CDC event to an Iceberg table
 
@@ -147,6 +177,7 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
         tracker: Optional status tracker for recording new tables
         db_type: Database type ('oracle' or 'postgres')
         event_scn: SCN/LSN of this event
+        primary_keys_map: Map of table_name -> [pk_columns] for dynamic PK handling
     """
 
     iceberg_table = iceberg_mgr.get_full_table_name(namespace, table_name)
@@ -162,6 +193,23 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
         logger.error(f"Could not ensure table {table_name} exists, skipping event")
         return
     
+    # Determine primary keys for MERGE/DELETE operations
+    pk_cols = None
+    if primary_keys_map and table_name in primary_keys_map:
+        # Use discovered primary keys from status tracker
+        pk_cols = primary_keys_map[table_name]
+        logger.debug(f"{table_name}: using primary keys from metadata: {pk_cols}")
+    else:
+        # Fallback to ROW_ID (Siebel) or first column
+        sample_data = after or before
+        if sample_data:
+            if 'ROW_ID' in sample_data:
+                pk_cols = ['ROW_ID']
+                logger.debug(f"{table_name}: using fallback primary key: ROW_ID")
+            else:
+                pk_cols = [list(sample_data.keys())[0]]
+                logger.warning(f"{table_name}: no primary key metadata found, using first column: {pk_cols[0]}")
+
     try:
         if operation in ('c', 'r'):
             # Insert
@@ -169,44 +217,50 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
                 df = spark.createDataFrame([after])
                 df.writeTo(iceberg_table).option("mergeSchema", "true").append()
                 logger.debug(f"INSERT into {table_name}")
-        
+
         elif operation == 'u':
-            # Update - use MERGE
-            if after and before:
+            # Update - use MERGE with dynamic PK handling (supports composite keys)
+            if after and before and pk_cols:
                 df = spark.createDataFrame([after])
                 df.createOrReplaceTempView("cdc_update")
-                
-                # Determine primary key (usually ROW_ID for Siebel)
-                pk_col = 'ROW_ID' if 'ROW_ID' in after else list(after.keys())[0]
-                
+
+                # Build ON clause for composite keys: "target.pk1 = source.pk1 AND target.pk2 = source.pk2"
+                on_conditions = " AND ".join([f"target.{pk} = source.{pk}" for pk in pk_cols])
+
+                # Build debug message showing PK values
+                pk_values = ", ".join([f"{pk}={after.get(pk)}" for pk in pk_cols])
+
                 spark.sql(f"""
                     MERGE INTO {iceberg_table} target
                     USING cdc_update source
-                    ON target.{pk_col} = source.{pk_col}
+                    ON {on_conditions}
                     WHEN MATCHED THEN UPDATE SET *
                     WHEN NOT MATCHED THEN INSERT *
                 """)
-                logger.debug(f"UPDATE {table_name} WHERE {pk_col} = {after.get(pk_col)}")
-        
-        elif operation == 'd':
-            # Delete using DataFrame API to avoid SQL injection
-            if before:
-                pk_col = 'ROW_ID' if 'ROW_ID' in before else list(before.keys())[0]
-                pk_value = before[pk_col]
+                logger.debug(f"UPDATE {table_name} WHERE {pk_values}")
 
+        elif operation == 'd':
+            # Delete - supports composite keys
+            if before and pk_cols:
                 # Create temp view for delete matching
                 delete_df = spark.createDataFrame([before])
                 delete_df.createOrReplaceTempView("cdc_delete")
+
+                # Build WHERE clause for composite keys
+                where_conditions = " AND ".join([f"target.{pk} = source.{pk}" for pk in pk_cols])
+
+                # Build debug message showing PK values
+                pk_values = ", ".join([f"{pk}={before.get(pk)}" for pk in pk_cols])
 
                 spark.sql(f"""
                     DELETE FROM {iceberg_table} target
                     WHERE EXISTS (
                         SELECT 1 FROM cdc_delete source
-                        WHERE target.{pk_col} = source.{pk_col}
+                        WHERE {where_conditions}
                     )
                 """)
-                logger.debug(f"DELETE from {table_name} WHERE {pk_col} = {pk_value}")
-        
+                logger.debug(f"DELETE from {table_name} WHERE {pk_values}")
+
         else:
             logger.warning(f"Unknown operation: {operation}")
         
@@ -247,16 +301,17 @@ def init_known_tables_cache(tracker: CDCStatusTracker):
 
 def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, kafka_config: dict, source_config: dict,
                         tracker: CDCStatusTracker, table_scn_map: Dict[str, int],
-                        batch_size: int = 1000):
+                        primary_keys_map: Dict[str, list], batch_size: int = 1000):
     """
     Process a batch of Kafka messages
-    
+
     Args:
         spark: SparkSession
         kafka_config: Kafka connection config
         source_config: Source database config
         tracker: CDC status tracker
         table_scn_map: Map of table -> starting SCN
+        primary_keys_map: Map of table -> [pk_columns] for dynamic PK handling
         batch_size: Number of messages to process per batch
     """
     
@@ -339,7 +394,8 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
                 # Apply the CDC event
                 apply_cdc_event(
                     spark, iceberg_mgr, namespace, table_name, operation, before, after,
-                    tracker=tracker, db_type=db_type, event_scn=event_scn
+                    tracker=tracker, db_type=db_type, event_scn=event_scn,
+                    primary_keys_map=primary_keys_map
                 )
                 events_processed += 1
 
@@ -415,11 +471,15 @@ def run_cdc_consumer(source_name: str, batch_size: int = 1000):
 
     # Get per-table SCN map for filtering
     table_scn_map = get_table_scn_map(tracker)
-    
+
+    # Get per-table primary keys map for dynamic PK handling
+    primary_keys_map = get_primary_keys_map(tracker)
+
     # Start processing
     try:
         query = process_kafka_batch(
-            spark, iceberg_mgr, kafka_config, source_config, tracker, table_scn_map, batch_size
+            spark, iceberg_mgr, kafka_config, source_config, tracker, table_scn_map,
+            primary_keys_map, batch_size
         )
         
         logger.info("CDC Consumer started. Press Ctrl+C to stop.")
