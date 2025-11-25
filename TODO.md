@@ -120,10 +120,13 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 ## Long Term (Future Enhancements)
 
 ### Schema Evolution
-- [TODO] Implement schema registry integration
-  - Detect schema changes between bulk load and CDC
-  - Handle column additions/deletions/type changes
-  - Validate compatibility before applying changes
+- [TODO] Implement schema management using Unity Catalog
+  - Use Unity Catalog's information_schema to detect schema changes
+  - Leverage Iceberg's built-in schema evolution (add/drop/rename columns)
+  - Query Unity Catalog table history for schema version tracking
+  - Store schema metadata in Unity Catalog table properties and tags
+  - Validate compatibility before applying changes using Iceberg metadata
+  - Use Unity Catalog's column-level lineage for impact analysis
 
 ### Exactly-Once Semantics
 - [TODO] Implement exactly-once CDC processing
@@ -174,11 +177,12 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - Coordinated status updates within same catalog
   - Rollback on failure using Iceberg snapshots
 
-- [TODO] Add schema registry integration (AWS Glue preferred for Databricks on AWS)
-  - Centralized schema management in AWS Glue Data Catalog
-  - Version control for schemas
-  - Compatibility enforcement
-  - Unity Catalog as primary metadata store
+- [TODO] Use Unity Catalog as schema registry
+  - Unity Catalog as centralized metadata and schema management
+  - Use table properties and tags for schema metadata
+  - Leverage Iceberg metadata for schema versioning
+  - Query information_schema for schema discovery and validation
+  - Use Unity Catalog audit logs for schema change tracking
 
 ---
 
@@ -250,7 +254,7 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 1. **Secrets Management**: [RESOLVED] Databricks Secrets implemented with AWS parameter store integration.
 2. **Monitoring**: CloudWatch for metrics/alarms + Databricks job monitoring sufficient, or need additional tooling?
 3. **Primary Keys**: Can we enforce a convention or need flexible per-table configuration in sources.yaml?
-4. **Schema Registry**: AWS Glue Data Catalog for schema management, or separate schema registry needed?
+4. **Schema Registry**: Unity Catalog native features sufficient, or need separate schema versioning system?
 5. **Exactly-Once**: Is at-least-once acceptable or do we need exactly-once guarantees for CDC?
 6. **Idempotency**: Should bulk loads be idempotent (checksum-based) or accept manual re-runs?
 7. **Table Priority**: Should certain tables have priority or guaranteed processing order in Databricks jobs?
