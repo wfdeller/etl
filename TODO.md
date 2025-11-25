@@ -105,15 +105,27 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - Improved maintainability - schema changes now require single location update
   - **File**: `lib/status_tracker.py`
 
+### Idempotency - Phase 8
+- [DONE] Implement idempotency checks for bulk load
+  - Extended status_tracker.py schema with `load_hash` column (SHA256)
+  - Added `_calculate_load_hash()` method (based on source_db + table + SCN/LSN + record_count)
+  - Added `check_duplicate_load()` method for hash-based duplicate detection
+  - Integrated SCN/LSN-based idempotency check in `direct_bulk_load.py:133`
+  - Skips extraction if same SCN/LSN already loaded (prevents duplicate data)
+  - Tested successfully with S_CONTACT table - duplicate load detected and skipped
+  - **Files**: `lib/status_tracker.py`, `jobs/direct_bulk_load.py`
+
+### CDC Position Tracking - Phase 9
+- [DONE] Improve CDC position tracking granularity
+  - Changed update interval from 100 events to 10 events (10x more granular)
+  - Added `CDC_POSITION_UPDATE_INTERVAL` environment variable for configuration
+  - Default: 10 events (reduces risk of loss on crash from ~100 to ~10 events)
+  - Configurable for performance tuning (higher = less I/O, lower = less risk)
+  - **File**: `jobs/cdc_kafka_to_iceberg.py:53, 413`
+
 ---
 
 ## Short Term (Next Sprint)
-
-### Idempotency
-- [TODO] Implement idempotency checks for bulk load
-  - Add checksum/hash column to track data versions
-  - Prevent duplicate loads of same data
-  - **File**: `jobs/direct_bulk_load.py`
 
 ### Monitoring
 - [TODO] Add metrics/monitoring hooks for Databricks
@@ -123,12 +135,6 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - Use Databricks job run metrics and monitoring APIs
   - Log structured events for downstream analysis
   - Consider Databricks SQL Analytics for dashboards
-
-### CDC Position Tracking
-- [TODO] Improve CDC position tracking granularity
-  - Current: Updates every 100 events (risk of loss on crash)
-  - Target: Update every 10 events or use Spark checkpointing more effectively
-  - **File**: `jobs/cdc_kafka_to_iceberg.py:380`
 
 ---
 

@@ -130,6 +130,29 @@ def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, names
 
     logger.info(f"{table_name}: Processing table: {table_name}")
 
+    # Idempotency check: skip if this load already completed
+    # Check if there's a completed load with the same SCN/LSN
+    try:
+        from pyspark.sql.functions import col
+        existing_load = tracker.spark.table(tracker.status_table) \
+            .filter(
+                (col("table_name") == table_name) &
+                (col("load_status") == "completed") &
+                (
+                    ((col("oracle_scn") == scn_lsn['oracle_scn']) & (scn_lsn['oracle_scn'] is not None)) |
+                    ((col("postgres_lsn") == scn_lsn['postgres_lsn']) & (scn_lsn['postgres_lsn'] is not None))
+                )
+            ) \
+            .first()
+
+        if existing_load:
+            logger.info(f"{table_name}: SKIP: {table_name} already loaded at SCN/LSN "
+                       f"(SCN: {scn_lsn['oracle_scn']}, LSN: {scn_lsn['postgres_lsn']}) - "
+                       f"{existing_load['record_count']} records - skipping duplicate load")
+            return (True, table_name, existing_load['record_count'], None)
+    except Exception as e:
+        logger.warning(f"{table_name}: Could not check for duplicate load: {e} - proceeding with load")
+
     for attempt in range(max_retries + 1):
         try:
             # Extract table

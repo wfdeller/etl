@@ -47,6 +47,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# CDC position update interval (number of events between position updates)
+# Default: 10 events (reduces risk of loss on crash vs previous 100)
+# Set CDC_POSITION_UPDATE_INTERVAL environment variable to override
+CDC_POSITION_UPDATE_INTERVAL = int(os.environ.get('CDC_POSITION_UPDATE_INTERVAL', '10'))
+
 
 # Spark session creation moved to SparkSessionFactory.create()
 
@@ -404,8 +409,8 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
                 )
                 events_processed += 1
 
-                # Update CDC position periodically
-                if events_processed % 100 == 0:
+                # Update CDC position periodically (configurable via CDC_POSITION_UPDATE_INTERVAL)
+                if events_processed % CDC_POSITION_UPDATE_INTERVAL == 0:
                     if db_type == 'oracle':
                         tracker.update_cdc_position(table_name, oracle_scn=event_scn)
                     else:

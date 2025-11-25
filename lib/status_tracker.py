@@ -4,6 +4,7 @@ Manages Iceberg table for tracking load progress and CDC position
 """
 
 import logging
+import hashlib
 from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType, TimestampType, ArrayType
@@ -28,6 +29,7 @@ class CDCStatusTracker:
     - postgres_lsn: string (for Postgres sources)
     - last_processed_timestamp: timestamp
     - error_message: string
+    - load_hash: string (SHA256 hash for idempotency checking)
     """
 
     def __init__(self, spark: SparkSession, namespace: str, catalog: str = 'local'):
@@ -66,7 +68,8 @@ class CDCStatusTracker:
             StructField('oracle_scn', LongType(), True),
             StructField('postgres_lsn', StringType(), True),
             StructField('last_processed_timestamp', TimestampType(), True),
-            StructField('error_message', StringType(), True)
+            StructField('error_message', StringType(), True),
+            StructField('load_hash', StringType(), True)
         ])
 
     def _merge_status_update(self, status_data: list) -> None:
@@ -86,6 +89,89 @@ class CDCStatusTracker:
             WHEN MATCHED THEN UPDATE SET *
             WHEN NOT MATCHED THEN INSERT *
         """)
+
+    @staticmethod
+    def _calculate_load_hash(source_db: str, table_name: str, oracle_scn: int = None,
+                            postgres_lsn: str = None, record_count: int = None) -> str:
+        """
+        Calculate SHA256 hash for idempotency checking
+
+        Hash is based on: source_db + table_name + (oracle_scn OR postgres_lsn) + record_count
+
+        Args:
+            source_db: Source database name
+            table_name: Table name
+            oracle_scn: Oracle SCN (if Oracle source)
+            postgres_lsn: Postgres LSN (if Postgres source)
+            record_count: Number of records loaded
+
+        Returns:
+            SHA256 hash string
+        """
+        # Build hash input string
+        hash_parts = [
+            str(source_db) if source_db else "",
+            str(table_name) if table_name else "",
+            str(oracle_scn) if oracle_scn else "",
+            str(postgres_lsn) if postgres_lsn else "",
+            str(record_count) if record_count is not None else ""
+        ]
+        hash_input = "|".join(hash_parts)
+
+        # Calculate SHA256
+        return hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
+
+    def check_duplicate_load(self, source_db: str, table_name: str, oracle_scn: int = None,
+                            postgres_lsn: str = None, record_count: int = None) -> dict:
+        """
+        Check if this load has already been completed (idempotency check)
+
+        Args:
+            source_db: Source database name
+            table_name: Table name
+            oracle_scn: Oracle SCN (if Oracle source)
+            postgres_lsn: Postgres LSN (if Postgres source)
+            record_count: Number of records to load
+
+        Returns:
+            dict with keys:
+                - is_duplicate: bool (True if duplicate detected)
+                - existing_load: Row (existing status record if duplicate, else None)
+                - hash: str (calculated hash for this load)
+        """
+        # Calculate hash for this load
+        load_hash = self._calculate_load_hash(source_db, table_name, oracle_scn, postgres_lsn, record_count)
+
+        # Query for existing load with same hash and completed status
+        try:
+            from pyspark.sql.functions import col
+            existing = self.spark.table(self.status_table) \
+                .filter(
+                    (col("table_name") == table_name) &
+                    (col("load_hash") == load_hash) &
+                    (col("load_status") == "completed")
+                ) \
+                .first()
+
+            if existing:
+                return {
+                    'is_duplicate': True,
+                    'existing_load': existing,
+                    'hash': load_hash
+                }
+            else:
+                return {
+                    'is_duplicate': False,
+                    'existing_load': None,
+                    'hash': load_hash
+                }
+        except Exception as e:
+            logger.warning(f"Error checking for duplicate load of {table_name}: {e}")
+            return {
+                'is_duplicate': False,
+                'existing_load': None,
+                'hash': load_hash
+            }
     
     def _create_status_table_if_not_exists(self):
         """Create the status tracking table if it doesn't exist"""
@@ -120,7 +206,8 @@ class CDCStatusTracker:
             'oracle_scn': oracle_scn,
             'postgres_lsn': postgres_lsn,
             'last_processed_timestamp': None,
-            'error_message': None
+            'error_message': None,
+            'load_hash': None
         }]
 
         self._merge_status_update(status_data)
@@ -156,6 +243,9 @@ class CDCStatusTracker:
         # Use provided primary_keys if available, otherwise preserve existing
         final_pks = primary_keys if primary_keys is not None else existing_pks
 
+        # Calculate load hash for idempotency
+        load_hash = self._calculate_load_hash(source_db, table_name, oracle_scn, postgres_lsn, record_count)
+
         status_data = [{
             'table_name': table_name,
             'load_status': 'completed',
@@ -167,7 +257,8 @@ class CDCStatusTracker:
             'oracle_scn': oracle_scn,
             'postgres_lsn': postgres_lsn,
             'last_processed_timestamp': None,
-            'error_message': None
+            'error_message': None,
+            'load_hash': load_hash
         }]
 
         self._merge_status_update(status_data)
@@ -208,7 +299,8 @@ class CDCStatusTracker:
             'oracle_scn': None,
             'postgres_lsn': None,
             'last_processed_timestamp': None,
-            'error_message': error_message
+            'error_message': error_message,
+            'load_hash': None
         }]
 
         self._merge_status_update(status_data)
@@ -229,7 +321,8 @@ class CDCStatusTracker:
             'oracle_scn': oracle_scn,
             'postgres_lsn': postgres_lsn,
             'last_processed_timestamp': last_timestamp or datetime.now(),
-            'error_message': None
+            'error_message': None,
+            'load_hash': None
         }]
 
         df = self.spark.createDataFrame(status_data, schema=self._get_status_schema())
