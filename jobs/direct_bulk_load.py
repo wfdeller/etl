@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT / 'lib'))
 
 from config_loader import get_source_config, get_kafka_config
 from status_tracker import CDCStatusTracker
+from schema_tracker import SchemaTracker
 from extractors import get_extractor
 from pyspark.sql import SparkSession
 from spark_utils import SparkSessionFactory
@@ -114,7 +115,7 @@ def get_completed_tables(tracker: CDCStatusTracker) -> set:
 
 # Iceberg table writing moved to IcebergTableManager.write_table()
 
-def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, namespace: str,
+def process_single_table(table_name: str, extractor, tracker, schema_tracker, iceberg_mgr, namespace: str,
                         jdbc_config: dict, scn_lsn: dict, parallel_tables: int,
                         skip_empty: bool, max_retries: int, retry_backoff: int,
                         tables_with_long: dict):
@@ -185,6 +186,10 @@ def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, names
                     with write_lock:
                         iceberg_mgr.write_table(df, namespace, table_name)
 
+                        # Record baseline schema
+                        source_db = jdbc_config['url'].split('@')[-1] if '@' in jdbc_config['url'] else jdbc_config['url']
+                        schema_tracker.record_baseline_schema(table_name, df.schema, source_db)
+
                     # Record completion with 0 records
                     with write_lock:
                         tracker.record_initial_load_complete(
@@ -211,6 +216,10 @@ def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, names
             # Write to Iceberg
             with write_lock:
                 iceberg_mgr.write_table(df, namespace, table_name)
+
+                # Record baseline schema
+                source_db = jdbc_config['url'].split('@')[-1] if '@' in jdbc_config['url'] else jdbc_config['url']
+                schema_tracker.record_baseline_schema(table_name, df.schema, source_db)
 
             # Unpersist if it was persisted
             if metadata.get('persisted'):
@@ -374,6 +383,7 @@ def direct_bulk_load(
     # Initialize utilities
     iceberg_mgr = IcebergTableManager(spark, catalog)
     tracker = CDCStatusTracker(spark, namespace, catalog)
+    schema_tracker = SchemaTracker(spark, namespace, catalog)
 
     # Get JDBC connection details
     jdbc_config = DatabaseConnectionBuilder.build_jdbc_config(source_config)
@@ -421,7 +431,7 @@ def direct_bulk_load(
             logger.info(f"Table {i}/{len(tables_to_process)}: {table_name}")
             
             success, table, records, error = process_single_table(
-                table_name, extractor, tracker, iceberg_mgr, namespace, jdbc_config,
+                table_name, extractor, tracker, schema_tracker, iceberg_mgr, namespace, jdbc_config,
                 scn_lsn, parallel_tables, skip_empty, max_retries,
                 retry_backoff, tables_with_long
             )
@@ -438,7 +448,7 @@ def direct_bulk_load(
             futures = {
                 executor.submit(
                     process_single_table,
-                    table_name, extractor, tracker, iceberg_mgr, namespace, jdbc_config,
+                    table_name, extractor, tracker, schema_tracker, iceberg_mgr, namespace, jdbc_config,
                     scn_lsn, parallel_tables, skip_empty, max_retries,
                     retry_backoff, tables_with_long
                 ): table_name

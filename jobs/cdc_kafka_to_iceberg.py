@@ -26,6 +26,7 @@ from pyspark.sql.types import StructType, StructField, StringType, LongType, Tim
 
 from config_loader import get_source_config, get_kafka_config
 from status_tracker import CDCStatusTracker
+from schema_tracker import SchemaTracker
 from spark_utils import SparkSessionFactory
 from iceberg_utils import IcebergTableManager
 
@@ -171,7 +172,8 @@ def get_primary_keys_map(tracker: CDCStatusTracker) -> Dict[str, list]:
 def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, namespace: str, table_name: str,
                     operation: str, before: dict, after: dict,
                     tracker: CDCStatusTracker = None, db_type: str = None,
-                    event_scn: int = None, primary_keys_map: Dict[str, list] = None):
+                    event_scn: int = None, primary_keys_map: Dict[str, list] = None,
+                    schema_tracker: SchemaTracker = None, source_db: str = None):
     """
     Apply a CDC event to an Iceberg table
 
@@ -187,6 +189,8 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
         db_type: Database type ('oracle' or 'postgres')
         event_scn: SCN/LSN of this event
         primary_keys_map: Map of table_name -> [pk_columns] for dynamic PK handling
+        schema_tracker: Optional schema tracker for detecting schema changes
+        source_db: Source database identifier for schema change tracking
     """
 
     iceberg_table = iceberg_mgr.get_full_table_name(namespace, table_name)
@@ -201,7 +205,22 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
     if not iceberg_mgr.ensure_table_exists(namespace, table_name, sample_data):
         logger.error(f"Could not ensure table {table_name} exists, skipping event")
         return
-    
+
+    # Detect schema changes before applying CDC event
+    if schema_tracker and source_db:
+        try:
+            # Get current schema from the event data
+            current_df = spark.createDataFrame([sample_data])
+            changes = schema_tracker.detect_and_record_changes(table_name, current_df.schema, source_db)
+
+            if changes:
+                for change in changes:
+                    logger.warning(f"Schema change detected in {table_name}: {change['change_type']} - "
+                                 f"column {change['column_name']} "
+                                 f"({change['old_data_type']} -> {change['new_data_type']})")
+        except Exception as e:
+            logger.error(f"Error detecting schema changes for {table_name}: {e}")
+
     # Determine primary keys for MERGE/DELETE operations
     pk_cols = None
     if primary_keys_map and table_name in primary_keys_map:
@@ -311,7 +330,7 @@ def init_known_tables_cache(tracker: CDCStatusTracker):
 
 def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, kafka_config: dict, source_config: dict,
                         tracker: CDCStatusTracker, table_scn_map: Dict[str, int],
-                        primary_keys_map: Dict[str, list], batch_size: int = 1000):
+                        primary_keys_map: Dict[str, list], schema_tracker: SchemaTracker = None, batch_size: int = 1000):
     """
     Process a batch of Kafka messages
 
@@ -322,13 +341,18 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
         tracker: CDC status tracker
         table_scn_map: Map of table -> starting SCN
         primary_keys_map: Map of table -> [pk_columns] for dynamic PK handling
+        schema_tracker: Optional schema tracker for detecting schema changes
         batch_size: Number of messages to process per batch
     """
     
     namespace = source_config['iceberg_namespace']
     topic_prefix = source_config['kafka_topic_prefix']
     db_type = source_config['database_type']
-    
+
+    # Extract source_db identifier for schema tracking (extract host from JDBC URL)
+    jdbc_url = source_config['database_connection'].get('url', '')
+    source_db = jdbc_url.split('@')[-1] if '@' in jdbc_url else jdbc_url
+
     # Build topic pattern (e.g., dev.siebel.SIEBEL.*)
     schema = source_config['database_connection']['schema']
     topic_pattern = f"{topic_prefix}.{schema}.*"
@@ -405,7 +429,8 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
                 apply_cdc_event(
                     spark, iceberg_mgr, namespace, table_name, operation, before, after,
                     tracker=tracker, db_type=db_type, event_scn=event_scn,
-                    primary_keys_map=primary_keys_map
+                    primary_keys_map=primary_keys_map,
+                    schema_tracker=schema_tracker, source_db=source_db
                 )
                 events_processed += 1
 
@@ -471,6 +496,7 @@ def run_cdc_consumer(source_name: str, batch_size: int = 1000):
     # Initialize utilities
     iceberg_mgr = IcebergTableManager(spark)
     tracker = CDCStatusTracker(spark, namespace)
+    schema_tracker = SchemaTracker(spark, namespace)
 
     # Initialize known tables cache
     init_known_tables_cache(tracker)
@@ -495,7 +521,7 @@ def run_cdc_consumer(source_name: str, batch_size: int = 1000):
     try:
         query = process_kafka_batch(
             spark, iceberg_mgr, kafka_config, source_config, tracker, table_scn_map,
-            primary_keys_map, batch_size
+            primary_keys_map, schema_tracker, batch_size
         )
         
         logger.info("CDC Consumer started. Press Ctrl+C to stop.")

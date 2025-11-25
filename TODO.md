@@ -123,6 +123,20 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - Configurable for performance tuning (higher = less I/O, lower = less risk)
   - **File**: `jobs/cdc_kafka_to_iceberg.py:53, 413`
 
+### Schema Change Tracking - Phase 10
+- [DONE] Implement comprehensive schema change tracking and notification system
+  - Created `lib/schema_tracker.py` - SchemaTracker class with `_schema_changes` audit table (339 lines)
+  - Tracks baseline schema, column additions, removals, and type modifications
+  - Integrated baseline capture in `jobs/direct_bulk_load.py` (lines 189-191, 220-222)
+  - Integrated change detection in `jobs/cdc_kafka_to_iceberg.py` (lines 209-222)
+  - Created `jobs/query_schema_changes.py` - CLI tool for querying schema changes (241 lines)
+  - Created `docs/SCHEMA_CHANGE_TRACKING.md` - Comprehensive documentation (400+ lines)
+  - Schema changes logged as warnings in CDC consumer for developer awareness
+  - Supports filtering by table, change type, and date range
+  - CSV export capability for reporting and analysis
+  - **Files**: `lib/schema_tracker.py`, `jobs/direct_bulk_load.py`, `jobs/cdc_kafka_to_iceberg.py`,
+    `jobs/query_schema_changes.py`, `docs/SCHEMA_CHANGE_TRACKING.md`
+
 ---
 
 ## Short Term (Next Sprint)
@@ -141,15 +155,12 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 ## Long Term (Future Enhancements)
 
 ### Schema Change Tracking & Notification
-- [TODO] Implement schema change tracking for transformation developers
-  - Create `lib/schema_tracker.py` - SchemaTracker class with `_schema_changes` audit table
-  - Modify `jobs/direct_bulk_load.py` (line 179) - Establish baseline schema for new tables
-  - Modify `jobs/cdc_kafka_to_iceberg.py` (line 165) - Detect and notify on schema changes
-  - Create `lib/notification_handler.py` - Email/Slack/SNS notifications (Phase 2)
+- [DONE] Implement schema change tracking for transformation developers (See Phase 10 above)
+- [TODO] Add notification handler (Phase 2 - Future Enhancement)
+  - Create `lib/notification_handler.py` - Email/Slack/SNS notifications
   - Update `config/sources.yaml.template` - Add notification configuration
-  - Create `jobs/query_schema_changes.py` - Query audit table CLI tool
-  - Create `docs/SCHEMA_CHANGE_TRACKING.md` - User documentation
-  - **Files**: See architectural overview in ARCHITECTURE.md
+  - Integrate with Databricks job notifications and CloudWatch alarms
+  - Configurable notification thresholds and recipients
 
 ### Schema Evolution
 - [TODO] Enhance schema management (depends on Schema Change Tracking above)
@@ -223,6 +234,7 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 - [DONE] TODO tracking (this file)
 - [DONE] Databricks deployment guide (docs/DATABRICKS_DEPLOYMENT.md)
 - [DONE] Oracle LONG limitations documentation (docs/ORACLE_LONG_LIMITATIONS.md)
+- [DONE] Schema change tracking documentation (docs/SCHEMA_CHANGE_TRACKING.md)
 - [DONE] Configuration templates with examples (config/*.template)
 
 ### Pending
