@@ -1,18 +1,18 @@
 # ETL Pipeline - Database to Iceberg Lakehouse
 
-Production-grade ETL pipeline for extracting data from Oracle and PostgreSQL databases and loading it into an Apache Iceberg data lakehouse with Change Data Capture (CDC) support.
+An ETL pipeline for extracting data from Oracle and PostgreSQL databases and loading it into an Apache Iceberg data lakehouse with Change Data Capture (CDC) support.
 
 ## Features
 
 - **Dual-Phase Architecture**: Initial bulk load + continuous CDC streaming
-- **Multi-Database Support**: Oracle (11g+) and PostgreSQL
+- **Multi-Database Support**: Oracle and PostgreSQL with automatic primary key discovery
 - **Parallel Processing**: Configurable table-level and partition-level parallelism
 - **Fault Tolerance**: Checkpoint/resume capability with automatic retry logic
 - **Schema Handling**: Automatic Oracle NUMBER type fixes, LONG column handling
 - **CDC Integration**: Debezium-based change capture via Kafka
 - **Status Tracking**: Built-in progress tracking in Iceberg
 - **Databricks Ready**: Seamless deployment to Databricks with Unity Catalog support
-- **Cloud Storage**: AWS S3 and MinIO (S3-compatible) support
+- **Cloud Storage**: AWS S3 and MinIO (S3-compatible for local testing) support
 - **Security**: Environment variables + Databricks Secrets management
 
 ## Architecture
@@ -29,554 +29,874 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture docum
 
 This ETL pipeline supports two deployment modes:
 
-### 1. Local Development (This Guide)
-
-- Self-managed Spark cluster
-- Local filesystem or MinIO for storage
+### 1. Local Development
+- Self-managed Spark environment
+- Local filesystem storage
 - Environment variable-based secrets
-- Suitable for: Development, testing, on-premises deployments
+- **Best for**: Development, testing, and small-scale deployments
 
-### 2. Databricks Production Deployment
-
+### 2. Databricks Production
 - Managed Spark clusters with auto-scaling
 - Unity Catalog for governance
 - AWS S3 for cloud storage
 - Databricks Secrets for credential management
-- Suitable for: Production cloud deployments on AWS
+- **Best for**: Production cloud deployments
 
-**Core PySpark logic works identically in both modes.** The main differences are deployment method, storage configuration, and secrets management.
-
-**For Databricks deployment, see:** [docs/DATABRICKS_DEPLOYMENT.md](docs/DATABRICKS_DEPLOYMENT.md)
-
-The sections below describe local development setup. For Databricks, skip to the deployment guide.
+**The core PySpark code works identically in both modes.** The main differences are deployment method, storage configuration, and secrets management.
 
 ---
 
+# Local Development Setup
+
+This section provides step-by-step instructions for setting up the ETL pipeline on your local machine for development and testing.
+
 ## Prerequisites
 
-### Software Requirements
+Before starting, ensure you have the following installed:
 
-- Python 3.7+
-- Apache Spark 3.5+ (with Iceberg extensions)
-- JDBC Drivers:
-  - Oracle: `ojdbc8.jar` (or newer)
-  - PostgreSQL: `postgresql-42.6.0.jar` (or newer)
-- Apache Kafka (for CDC)
-- Debezium connectors (Oracle or PostgreSQL)
+- **Operating System**: macOS, Linux, or Windows with WSL2
+- **Java**: OpenJDK 11 or 17 (required for Apache Spark)
+- **Python**: Version 3.9, 3.10, 3.11, or 3.12
+- **Git**: For cloning the repository
+- **Database Access**: Network access to your Oracle or PostgreSQL source databases
 
-### System Requirements
+## Step 1: Install Java
 
-- Minimum 8GB RAM for Spark driver
-- Sufficient disk space for:
-  - Iceberg warehouse (data storage)
-  - Spark checkpoints
-  - Application logs
-
-## Installation
-
-### 1. Clone Repository
+Apache Spark requires Java 11 or 17. Check if Java is installed:
 
 ```bash
+java -version
+```
+
+If Java is not installed or you have an incompatible version:
+
+### macOS (using Homebrew)
+```bash
+# Install Homebrew if not already installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Java 17
+brew install openjdk@17
+
+# Set JAVA_HOME environment variable
+echo 'export JAVA_HOME=/opt/homebrew/opt/openjdk@17' >> ~/.zshrc
+echo 'export PATH="$JAVA_HOME/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### Linux (Ubuntu/Debian)
+```bash
+sudo apt update
+sudo apt install openjdk-17-jdk
+
+# Set JAVA_HOME
+echo 'export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64' >> ~/.bashrc
+echo 'export PATH="$JAVA_HOME/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Windows (WSL2)
+Follow the Linux instructions above within your WSL2 terminal.
+
+## Step 2: Clone the Repository
+
+```bash
+# Clone the repository
 git clone <repository-url>
 cd etl
+
+# Verify you're in the correct directory
+pwd  # Should show: /path/to/etl
+ls   # Should show: README.md, lib/, jobs/, config/, etc.
 ```
 
-### 2. Install Python Dependencies
+## Step 3: Install Python and Create Virtual Environment
+
+### Check Python Version
 
 ```bash
+python3 --version
+```
+
+You should see Python 3.9 or newer (e.g., `Python 3.12.0`).
+
+### Install Python if Needed
+
+**macOS:**
+```bash
+brew install python@3.12
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update
+sudo apt install python3.12 python3.12-venv python3-pip
+```
+
+### Create Virtual Environment
+
+A virtual environment isolates Python dependencies for this project:
+
+```bash
+# Create virtual environment (do this inside the etl/ directory)
+python3 -m venv venv
+
+# Activate the virtual environment
+# macOS/Linux:
+source venv/bin/activate
+
+# Windows WSL2:
+source venv/bin/activate
+
+# Your prompt should now show (venv) at the beginning
+```
+
+**Important**: You need to activate the virtual environment every time you open a new terminal session:
+```bash
+cd /path/to/etl
+source venv/bin/activate
+```
+
+## Step 4: Install Python Dependencies
+
+With the virtual environment activated:
+
+```bash
+# Upgrade pip to latest version
+pip install --upgrade pip
+
+# Install required Python packages
 pip install pyspark==3.5.0 pyyaml
+
+# Verify installation
+pip list | grep -E "pyspark|PyYAML"
 ```
 
-### 3. Download JDBC Drivers
+You should see:
+```
+pyspark       3.5.0
+PyYAML        6.0.x
+```
+
+## Step 5: Download JDBC Drivers
+
+JDBC drivers allow Spark to connect to Oracle and PostgreSQL databases. Download them to the `jars/` directory:
 
 ```bash
-# Oracle
-wget https://download.oracle.com/otn-pub/otn_software/jdbc/ojdbc8.jar \
-  -O /opt/spark/jars/ojdbc8.jar
+# Create jars directory in project root
+mkdir -p jars
 
-# PostgreSQL
-wget https://jdbc.postgresql.org/download/postgresql-42.6.0.jar \
-  -O /opt/spark/jars/postgresql-42.6.0.jar
+# Download Oracle JDBC Driver (ojdbc8 for Oracle 12c+)
+curl -L https://repo1.maven.org/maven2/com/oracle/database/jdbc/ojdbc8/21.9.0.0/ojdbc8-21.9.0.0.jar \
+  -o jars/ojdbc8.jar
+
+# Download PostgreSQL JDBC Driver
+curl -L https://jdbc.postgresql.org/download/postgresql-42.7.1.jar \
+  -o jars/postgresql-42.7.1.jar
+
+# Verify downloads
+ls -lh jars/
 ```
 
-### 4. Configure Spark
+You should see:
+```
+ojdbc8.jar           (approx 4-5 MB)
+postgresql-42.7.1.jar (approx 1 MB)
+```
 
-Ensure Spark is configured with Iceberg support:
+## Step 6: Set Up Environment Variables
+
+The pipeline uses environment variables for configuration and secrets.
+
+### Create Environment Configuration File
+
+Create a file to store your environment variables:
 
 ```bash
-# In spark-defaults.conf or pass as --config
-spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
-spark.sql.catalog.local=org.apache.iceberg.spark.SparkCatalog
-spark.sql.catalog.local.type=hadoop
-spark.sql.catalog.local.warehouse=file:///opt/data/lakehouse/warehouse
+# Create .env file (this file will NOT be committed to git)
+touch .env
+chmod 600 .env  # Restrict permissions for security
 ```
 
-### 5. Create Directory Structure
+Edit `.env` and add the following:
 
 ```bash
-mkdir -p /opt/pipeline/{lib,config,logs,checkpoints}
-mkdir -p /opt/data/lakehouse/warehouse
+# Project directories (update paths to match your system)
+export PROJECT_ROOT="$(pwd)"
+export CONFIG_DIR="${PROJECT_ROOT}/config"
+export CATALOG_NAME="local"
+export WAREHOUSE_PATH="file://${PROJECT_ROOT}/warehouse"
+
+# Python/Spark configuration
+export PYSPARK_PYTHON="${PROJECT_ROOT}/venv/bin/python"
+export PYSPARK_DRIVER_PYTHON="${PROJECT_ROOT}/venv/bin/python"
+
+# Java configuration
+export JAVA_HOME="/opt/homebrew/opt/openjdk@17"  # macOS
+# export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"  # Linux
+
+# Database credentials (replace with your actual passwords)
+export ORACLE_DEV_SIEBEL_PASSWORD="your_oracle_password_here"
+export POSTGRES_PROD_PASSWORD="your_postgres_password_here"
+
+# Add more database passwords as needed
+# export ORACLE_PROD_PASSWORD="..."
+# export POSTGRES_DEV_PASSWORD="..."
 ```
 
-### 6. Install Pipeline Code
+### Load Environment Variables
+
+Every time you start a new terminal session, load the environment:
 
 ```bash
-# Copy library modules
-cp -r lib /opt/pipeline/
+cd /path/to/etl
+source venv/bin/activate  # Activate Python virtual environment
+source .env               # Load environment variables
 
-# Copy job scripts
-cp -r jobs /opt/pipeline/
-
-# Copy configuration templates
-cp config/*.template /opt/pipeline/config/
+# Verify environment variables are set
+echo $CONFIG_DIR
+echo $WAREHOUSE_PATH
 ```
 
-## Configuration
+**Tip**: Add this to your shell profile for convenience:
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+alias etl-env='cd /path/to/etl && source venv/bin/activate && source .env'
 
-### 1. Database Source Configuration
+# Then just run:
+etl-env
+```
 
-Create `/opt/pipeline/config/sources.yaml` from template:
+## Step 7: Create Directory Structure
 
 ```bash
-cp config/sources.yaml.template /opt/pipeline/config/sources.yaml
+# Create required directories
+mkdir -p warehouse
+mkdir -p logs
+mkdir -p checkpoints
+
+# Verify structure
+ls -la
 ```
 
-Edit the file to add your database sources:
+You should see:
+```
+config/          # Configuration files
+jars/            # JDBC drivers
+jobs/            # Python job scripts
+lib/             # Python library modules
+docs/            # Documentation
+warehouse/       # Iceberg table storage (will contain data)
+logs/            # Application logs
+checkpoints/     # Spark streaming checkpoints
+venv/            # Python virtual environment
+.env             # Environment variables (DO NOT commit)
+```
+
+## Step 8: Configure Database Sources
+
+### Create Configuration from Template
+
+```bash
+# Copy template to create your configuration
+cp config/sources.yaml.template config/sources.yaml
+
+# Copy Kafka configuration template
+cp config/kafka_clusters.yaml.template config/kafka_clusters.yaml
+```
+
+### Edit Database Configuration
+
+Edit `config/sources.yaml` to add your database connection details:
 
 ```yaml
 sources:
-  my_oracle_db:
+  # Example: Oracle Siebel database
+  dev_siebel:
     database_type: oracle
-    kafka_topic_prefix: prod.myapp
-    iceberg_namespace: bronze.myapp
+    kafka_topic_prefix: dev.siebel
+    iceberg_namespace: bronze.siebel
 
     database_connection:
-      host: oracle.example.com
+      host: oracle.example.com       # Your Oracle host
       port: 1521
-      service_name: PRODDB
-      username: etl_user
-      password: ${ORACLE_PASSWORD}  # Use environment variable
-      schema: APP_SCHEMA
+      service_name: DEVDB            # Your Oracle service name
+      username: siebel_user          # Your database username
+      password: ${ORACLE_DEV_SIEBEL_PASSWORD}  # References .env variable
+      schema: SIEBEL                 # Schema to extract
 
     bulk_load:
-      parallel_tables: 8
-      parallel_workers: 4
+      parallel_tables: 8              # JDBC partitions per table
+      parallel_workers: 4             # Tables processed simultaneously
       batch_size: 50000
       skip_empty_tables: false
-      handle_long_columns: exclude  # exclude | skip_table | error
+      handle_long_columns: exclude    # exclude | skip_table | error
       checkpoint_enabled: true
+      checkpoint_interval: 50
       max_retries: 3
       retry_backoff: 2
       large_table_threshold: 100000
 ```
 
-### 2. Set Environment Variables
+**Important Security Notes**:
+- **Never commit** `config/sources.yaml` or `config/kafka_clusters.yaml` with real credentials
+- Always use environment variable references: `${VAR_NAME}`
+- Add these files to `.gitignore` (already configured in this project)
 
-Set credentials as environment variables:
+### Edit Kafka Configuration
 
-```bash
-export ORACLE_PASSWORD='your_secure_password'
-export POSTGRES_PASSWORD='your_secure_password'
-```
-
-For persistent configuration, add to `~/.bashrc` or use a secrets management system.
-
-### 3. Kafka Configuration
-
-Create `/opt/pipeline/config/kafka_clusters.yaml`:
+Edit `config/kafka_clusters.yaml`:
 
 ```yaml
 kafka_clusters:
   primary:
-    bootstrap_servers: kafka1:9092,kafka2:9092,kafka3:9092
+    bootstrap_servers: localhost:9092  # Your Kafka broker
     consumer_group_prefix: etl-cdc
     auto_offset_reset: earliest
 ```
 
-## Usage
+## Step 9: Verify Installation
 
-### Phase 1: Initial Bulk Load
-
-Extract all tables from source database and load into Iceberg:
+Run a quick validation to ensure everything is set up correctly:
 
 ```bash
-cd /opt/pipeline
+# Ensure environment is loaded
+source venv/bin/activate
+source .env
 
-# Basic usage
-python jobs/direct_bulk_load.py --source my_oracle_db
+# Check Python and dependencies
+python -c "import pyspark; print(f'PySpark version: {pyspark.__version__}')"
 
-# Filter specific tables (SQL LIKE pattern)
-python jobs/direct_bulk_load.py --source my_oracle_db --table-filter "CUSTOMER_%"
+# Check Java
+java -version
 
-# Tune parallelism
+# Check JDBC drivers
+ls -lh jars/
+
+# Check configuration
+ls -lh config/sources.yaml config/kafka_clusters.yaml
+
+# Check environment variables
+echo "CONFIG_DIR: $CONFIG_DIR"
+echo "WAREHOUSE_PATH: $WAREHOUSE_PATH"
+echo "CATALOG_NAME: $CATALOG_NAME"
+```
+
+If all checks pass, you're ready to run the pipeline!
+
+---
+
+# Running the Pipeline Locally
+
+## Phase 1: Initial Bulk Load
+
+Extract all tables from your source database and load them into Iceberg:
+
+```bash
+# Ensure environment is loaded
+source venv/bin/activate
+source .env
+
+# Run bulk load for a source (using source name from sources.yaml)
+python jobs/direct_bulk_load.py --source dev_siebel
+
+# Filter specific tables using SQL LIKE pattern
+python jobs/direct_bulk_load.py --source dev_siebel --table-filter "CUSTOMER_%"
+
+# Adjust parallelism for better performance
 python jobs/direct_bulk_load.py \
-  --source my_oracle_db \
+  --source dev_siebel \
   --parallel-tables 16 \
   --parallel-workers 8
 
-# Force full reload (ignore checkpoint)
-python jobs/direct_bulk_load.py --source my_oracle_db --no-resume
+# Force full reload (ignore checkpoint and resume from scratch)
+python jobs/direct_bulk_load.py --source dev_siebel --no-resume
 
-# Fresh start - drop all tables and reload (requires confirmation)
-python jobs/direct_bulk_load.py --source my_oracle_db --fresh-start
+# Fresh start: Drop ALL tables and reload (DESTRUCTIVE - requires confirmation)
+python jobs/direct_bulk_load.py --source dev_siebel --fresh-start
 
-# Fresh start with auto-confirmation (for automation)
-python jobs/direct_bulk_load.py --source my_oracle_db --fresh-start --yes
+# Fresh start with auto-confirmation (use in automation scripts)
+python jobs/direct_bulk_load.py --source dev_siebel --fresh-start --yes
 ```
 
-**Output**:
-- Data written to: `local.{iceberg_namespace}.{table_name}`
-- Status tracking: `local.{iceberg_namespace}._cdc_status`
-- Debezium config: `/opt/pipeline/config/debezium_{source}_cdc.json`
-- Logs: `/opt/pipeline/logs/direct_load.log`
+### Understanding the Output
 
-### Phase 2: Configure Debezium
+The bulk load will:
+1. **Discover primary keys** automatically from Oracle/PostgreSQL metadata
+2. **Extract tables** in parallel with point-in-time consistency
+3. **Write to Iceberg** at: `warehouse/<namespace>/<table_name>/`
+4. **Track status** in: `warehouse/<namespace>/_cdc_status/`
+5. **Generate Debezium config** at: `config/debezium_<source>_cdc.json`
+6. **Log progress** to: `logs/direct_load.log`
 
-The bulk load automatically generates a Debezium connector configuration. Deploy it to your Kafka Connect cluster:
+Monitor progress:
+```bash
+# Watch logs in real-time
+tail -f logs/direct_load.log
+
+# Check completed tables
+python jobs/validate_iceberg_tables.py --source dev_siebel --hide-empty
+```
+
+## Phase 2: Configure Debezium CDC
+
+The bulk load automatically generates a Debezium connector configuration. Deploy it to Kafka Connect:
 
 ```bash
-# Review generated config
-cat /opt/pipeline/config/debezium_my_oracle_db_cdc.json
+# Review the generated configuration
+cat config/debezium_dev_siebel_cdc.json
 
-# Deploy to Kafka Connect
-curl -X POST http://kafka-connect:8083/connectors \
+# Deploy to Kafka Connect (adjust URL to your Kafka Connect instance)
+curl -X POST http://localhost:8083/connectors \
   -H "Content-Type: application/json" \
-  -d @/opt/pipeline/config/debezium_my_oracle_db_cdc.json
+  -d @config/debezium_dev_siebel_cdc.json
+
+# Check connector status
+curl http://localhost:8083/connectors/dev_siebel_cdc/status
 ```
 
-### Phase 3: Start CDC Consumer
+## Phase 3: Start CDC Consumer
 
 Stream changes from Kafka to Iceberg:
 
 ```bash
-cd /opt/pipeline
+# Ensure environment is loaded
+source venv/bin/activate
+source .env
 
-# Basic usage
-python jobs/cdc_kafka_to_iceberg.py --source my_oracle_db
+# Start CDC consumer
+python jobs/cdc_kafka_to_iceberg.py --source dev_siebel
 
-# Higher throughput
-python jobs/cdc_kafka_to_iceberg.py --source my_oracle_db --batch-size 5000
+# Higher throughput (process more messages per batch)
+python jobs/cdc_kafka_to_iceberg.py --source dev_siebel --batch-size 5000
 
-# Using spark-submit for production
-spark-submit \
-  --master yarn \
-  --deploy-mode cluster \
-  --driver-memory 4g \
-  --executor-memory 8g \
-  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
-  --conf spark.sql.catalog.local=org.apache.iceberg.spark.SparkCatalog \
-  --conf spark.sql.catalog.local.type=hadoop \
-  --conf spark.sql.catalog.local.warehouse=file:///opt/data/lakehouse/warehouse \
-  jobs/cdc_kafka_to_iceberg.py --source my_oracle_db
+# Press Ctrl+C to gracefully stop
 ```
 
-Press `Ctrl+C` to gracefully stop the consumer.
+The CDC consumer will:
+- Load **primary key metadata** from status tracker
+- Use **dynamic MERGE/DELETE** operations (supports composite keys)
+- Filter duplicate events using SCN/LSN positions
+- Handle schema evolution automatically
 
-### Validation
+Monitor CDC consumer:
+```bash
+# Watch CDC logs
+tail -f logs/cdc_consumer.log
 
-Validate that data was loaded correctly:
+# Check CDC positions
+python -c "
+from pyspark.sql import SparkSession
+from lib.status_tracker import CDCStatusTracker
+
+spark = SparkSession.builder.appName('check').getOrCreate()
+tracker = CDCStatusTracker(spark, 'bronze.siebel')
+tracker.get_status().show(truncate=False)
+"
+```
+
+## Validation
+
+Verify that data was loaded correctly:
 
 ```bash
 # List all tables with row counts
-python jobs/validate_iceberg_tables.py --source my_oracle_db
+python jobs/validate_iceberg_tables.py --source dev_siebel
 
-# Hide empty tables
-python jobs/validate_iceberg_tables.py --source my_oracle_db --hide-empty
+# Hide empty tables from output
+python jobs/validate_iceberg_tables.py --source dev_siebel --hide-empty
 
 # Skip checking for missing tables
-python jobs/validate_iceberg_tables.py --source my_oracle_db --no-check-missing
+python jobs/validate_iceberg_tables.py --source dev_siebel --no-check-missing
 ```
 
-## Querying Data
+---
 
-Query loaded data using Spark SQL:
+# Querying Data
 
+Once data is loaded, you can query it using PySpark:
+
+```python
+from pyspark.sql import SparkSession
+
+# Create Spark session
+spark = SparkSession.builder \
+    .appName("Query Iceberg") \
+    .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
+    .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog") \
+    .config("spark.sql.catalog.local.type", "hadoop") \
+    .config("spark.sql.catalog.local.warehouse", "file:///path/to/etl/warehouse") \
+    .getOrCreate()
+
+# List tables
+spark.sql("SHOW TABLES IN local.bronze.siebel").show()
+
+# Query data
+spark.sql("SELECT * FROM local.bronze.siebel.s_contact LIMIT 10").show()
+
+# Check load status
+spark.sql("""
+    SELECT table_name, load_status, record_count,
+           array_size(primary_keys) as pk_count,
+           initial_load_end
+    FROM local.bronze.siebel._cdc_status
+    WHERE load_status = 'completed'
+    ORDER BY initial_load_end DESC
+""").show(truncate=False)
+
+# Time travel (query data as of a specific timestamp)
+spark.sql("""
+    SELECT * FROM local.bronze.siebel.s_contact
+    TIMESTAMP AS OF '2025-01-15 12:00:00'
+    LIMIT 10
+""").show()
+```
+
+---
+
+# Databricks Production Deployment
+
+For production deployments on Databricks with Unity Catalog, S3 storage, and enterprise features, see the comprehensive deployment guide:
+
+**[Databricks Deployment Guide](docs/DATABRICKS_DEPLOYMENT.md)**
+
+The Databricks guide covers:
+- Unity Catalog setup and configuration
+- S3 storage configuration with IAM roles
+- Databricks Secrets management
+- Cluster configuration and tuning
+- Workflow/job scheduling
+- Migration from local to Databricks
+- Production best practices
+
+Key differences in Databricks deployment:
+- **Storage**: S3 instead of local filesystem
+- **Catalog**: Unity Catalog instead of Hadoop catalog
+- **Secrets**: Databricks Secrets instead of environment variables
+- **Compute**: Managed clusters with auto-scaling
+- **Orchestration**: Databricks Workflows instead of manual execution
+
+---
+
+# Troubleshooting
+
+## Common Setup Issues
+
+### Python Import Errors
+
+**Problem**: `ModuleNotFoundError: No module named 'pyspark'`
+
+**Solution**:
 ```bash
-spark-sql
+# Ensure virtual environment is activated
+source venv/bin/activate
 
--- List tables
-SHOW TABLES IN local.bronze.myapp;
+# Reinstall dependencies
+pip install pyspark==3.5.0 pyyaml
 
--- Query data
-SELECT * FROM local.bronze.myapp.customers LIMIT 10;
-
--- Check status
-SELECT table_name, load_status, record_count, initial_load_end
-FROM local.bronze.myapp._cdc_status
-WHERE load_status = 'completed'
-ORDER BY initial_load_end DESC;
-
--- Time travel (Iceberg feature)
-SELECT * FROM local.bronze.myapp.customers
-TIMESTAMP AS OF '2025-01-01 12:00:00';
+# Verify installation
+pip list | grep pyspark
 ```
 
-## Monitoring
+### Java Not Found
 
-### Check Bulk Load Progress
+**Problem**: `java: command not found` or `JAVA_HOME is not set`
 
+**Solution**:
 ```bash
-# Tail logs
-tail -f /opt/pipeline/logs/direct_load.log
+# Check Java installation
+java -version
 
-# Query status table
-spark-sql -e "
-  SELECT
-    load_status,
-    COUNT(*) as count,
-    SUM(record_count) as total_records
-  FROM local.bronze.myapp._cdc_status
-  GROUP BY load_status
-"
-
-# List failed tables
-spark-sql -e "
-  SELECT table_name, error_message
-  FROM local.bronze.myapp._cdc_status
-  WHERE load_status = 'failed'
-"
+# If not installed, install Java (see Step 1)
+# Set JAVA_HOME in .env file
+export JAVA_HOME="/opt/homebrew/opt/openjdk@17"  # macOS
+# or
+export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"  # Linux
 ```
 
-### Check CDC Consumer Health
+### JDBC Driver Not Found
 
+**Problem**: `java.lang.ClassNotFoundException: oracle.jdbc.driver.OracleDriver`
+
+**Solution**:
 ```bash
-# Tail logs
-tail -f /opt/pipeline/logs/cdc_consumer.log
+# Ensure JDBC drivers are in jars/ directory
+ls -lh jars/
 
-# Check Kafka consumer lag
-kafka-consumer-groups.sh --bootstrap-server kafka1:9092 \
-  --group etl-cdc-my_oracle_db --describe
-
-# Query CDC positions
-spark-sql -e "
-  SELECT
-    table_name,
-    oracle_scn,
-    last_processed_timestamp
-  FROM local.bronze.myapp._cdc_status
-  WHERE last_processed_timestamp IS NOT NULL
-  ORDER BY last_processed_timestamp DESC
-"
+# If missing, download them (see Step 5)
+curl -L https://repo1.maven.org/maven2/com/oracle/database/jdbc/ojdbc8/21.9.0.0/ojdbc8-21.9.0.0.jar \
+  -o jars/ojdbc8.jar
 ```
 
-## Troubleshooting
+### Database Connection Errors
 
-### Bulk Load Issues
+**Problem**: `ORA-12154: TNS:could not resolve the connect identifier` or connection timeouts
 
-**Problem**: Table extraction fails with "ORA-01555: snapshot too old"
+**Solution**:
 ```bash
-# Solution: Reduce parallel_tables to lower memory pressure
-python jobs/direct_bulk_load.py --source my_oracle_db --parallel-tables 4
+# Verify database connectivity
+ping oracle.example.com
+
+# Test Oracle connection
+sqlplus username/password@//oracle.example.com:1521/DEVDB
+
+# Check firewall rules allow port 1521 (Oracle) or 5432 (PostgreSQL)
+# Verify database credentials in sources.yaml and .env
 ```
 
-**Problem**: LONG column error or warning
+## Bulk Load Issues
+
+### Oracle LONG Column Errors
+
+**Problem**: Warnings about LONG columns or subquery errors
+
+**Solution**: This is expected behavior. Oracle LONG columns cannot be read via Spark JDBC.
+
+The pipeline handles this automatically:
+- **Default mode**: `exclude` - Skips LONG columns, loads the rest
+- CDC (Debezium) will capture LONG column changes going forward
+
+See [docs/ORACLE_LONG_LIMITATIONS.md](docs/ORACLE_LONG_LIMITATIONS.md) for detailed explanation.
+
+### Out of Memory Errors
+
+**Problem**: `java.lang.OutOfMemoryError: Java heap space`
+
+**Solution**:
 ```bash
-# Solution: Configure handle_long_columns in sources.yaml
-# Options:
-#   exclude (default) - Skip LONG columns, load rest of table
-#   skip_table - Skip entire table if LONG columns exist
-#   error - Fail the job if LONG columns found
+# Reduce parallelism
+python jobs/direct_bulk_load.py --source dev_siebel --parallel-workers 2
+
+# Lower large_table_threshold in sources.yaml
+# This triggers more disk persistence
+large_table_threshold: 50000  # Down from 100000
 ```
 
-**Oracle LONG Column Handling:**
+### Permission Denied on warehouse/
 
-Oracle LONG columns **cannot be read via Spark JDBC** due to fundamental Oracle restrictions (subquery limitations).
+**Problem**: `PermissionError: [Errno 13] Permission denied: 'warehouse/bronze.siebel'`
 
-**Recommended approach**: Use `exclude` mode (default)
-- LONG columns are automatically excluded from bulk load
-- Rest of table loads with full point-in-time consistency
-- CDC (Debezium) captures LONG column changes going forward
-
-For detailed explanation, alternatives, and workarounds, see [docs/ORACLE_LONG_LIMITATIONS.md](docs/ORACLE_LONG_LIMITATIONS.md)
-
-**Problem**: Out of memory errors
+**Solution**:
 ```bash
-# Solution: Adjust large_table_threshold or increase Spark memory
-# Lower threshold = more disk persistence
+# Ensure warehouse directory is writable
+chmod -R 755 warehouse/
 ```
 
-**Problem**: Need to completely restart bulk load (corrupted data, schema changes, etc.)
+## CDC Consumer Issues
+
+### No Events Being Processed
+
+**Problem**: CDC consumer starts but processes no events
+
+**Solution**:
 ```bash
-# WARNING: This will DROP ALL TABLES in the namespace and clear checkpoints
+# 1. Check Debezium connector status
+curl http://localhost:8083/connectors/dev_siebel_cdc/status
 
-# Interactive mode (requires typing 'YES' to confirm)
-python jobs/direct_bulk_load.py --source my_oracle_db --fresh-start
+# 2. Verify Kafka topics exist
+kafka-topics.sh --bootstrap-server localhost:9092 --list | grep siebel
 
-# Automated mode (auto-confirms - use with caution)
-python jobs/direct_bulk_load.py --source my_oracle_db --fresh-start --yes
+# 3. Check consumer is subscribed (look in logs)
+grep "Subscribing to Kafka topics" logs/cdc_consumer.log
+
+# 4. Verify Kafka broker is accessible
+telnet localhost 9092
 ```
 
-### CDC Consumer Issues
+### Primary Key Not Found Warnings
 
-**Problem**: Consumer not processing events
-```bash
-# Check Debezium connector status
-curl http://kafka-connect:8083/connectors/my-cdc-connector/status
+**Problem**: Logs show "no primary key metadata found, using first column"
 
-# Verify Kafka topics exist
-kafka-topics.sh --bootstrap-server kafka1:9092 --list | grep myapp
+**Solution**: This warning appears for tables discovered via CDC before bulk load runs.
 
-# Check consumer is subscribed
-# Look for "Subscribing to Kafka topics: ..." in logs
+To fix:
+1. Run bulk load first to discover and store primary keys
+2. Or manually configure primary keys in `sources.yaml`:
+
+```yaml
+sources:
+  dev_siebel:
+    # ... other config ...
+    primary_keys:
+      MY_TABLE: [UNIQUE_ID]           # Single column PK
+      OTHER_TABLE: [COL1, COL2]       # Composite key
 ```
 
-**Problem**: Duplicate CDC events
-```bash
-# Check if SCN/LSN filtering is working
-grep "Will filter events before" /opt/pipeline/logs/cdc_consumer.log
+---
 
-# Verify status table has correct positions
-spark-sql -e "SELECT * FROM local.bronze.myapp._cdc_status"
+# Configuration Reference
+
+## Bulk Load Parameters
+
+| Parameter               | Description                                     | Default |
+| ----------------------- | ----------------------------------------------- | ------- |
+| `parallel_tables`       | JDBC partitions per table (more = faster)      | 8       |
+| `parallel_workers`      | Tables processed simultaneously                 | 4       |
+| `batch_size`            | JDBC fetch size (rows per fetch)               | 50000   |
+| `skip_empty_tables`     | Skip tables with 0 rows                         | false   |
+| `handle_long_columns`   | Oracle LONG handling (exclude/skip_table/error) | exclude |
+| `checkpoint_enabled`    | Resume capability after failures                | true    |
+| `checkpoint_interval`   | Checkpoint every N tables                       | 50      |
+| `max_retries`           | Retry attempts per table                        | 3       |
+| `retry_backoff`         | Exponential backoff multiplier                  | 2       |
+| `large_table_threshold` | Rows triggering disk persistence                | 100000  |
+
+## CDC Consumer Parameters
+
+| Parameter        | Description                     | Default |
+| ---------------- | ------------------------------- | ------- |
+| `--batch-size`   | Kafka messages per micro-batch  | 1000    |
+| Trigger interval | Micro-batch processing interval | 10s     |
+
+## Primary Key Configuration
+
+The pipeline automatically discovers primary keys from database metadata. To override:
+
+```yaml
+# In sources.yaml under each source
+primary_keys:
+  TABLE_NAME: [COLUMN1]              # Single column
+  COMPOSITE_TABLE: [COL1, COL2]      # Composite key
+  NO_PK_TABLE: [UNIQUE_ID]           # Manual specification
 ```
 
-**Problem**: Checkpoint corruption
-```bash
-# Delete checkpoint and restart (will replay from earliest)
-rm -rf /opt/pipeline/checkpoints/bronze.myapp/
-python jobs/cdc_kafka_to_iceberg.py --source my_oracle_db
-```
+---
 
-## Configuration Reference
-
-### Bulk Load Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `parallel_tables` | JDBC partitions per table | 8 |
-| `parallel_workers` | Tables processed simultaneously | 4 |
-| `batch_size` | JDBC fetch size | 50000 |
-| `skip_empty_tables` | Skip tables with 0 rows | true |
-| `handle_long_columns` | Oracle LONG handling (exclude/skip_table/error) | exclude |
-| `checkpoint_enabled` | Resume capability | true |
-| `max_retries` | Retry attempts per table | 3 |
-| `retry_backoff` | Exponential backoff multiplier | 2 |
-| `large_table_threshold` | Rows triggering disk persistence | 100000 |
-
-### CDC Consumer Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--batch-size` | Kafka messages per micro-batch | 1000 |
-| Trigger interval | Micro-batch processing interval | 10s |
-
-## Directory Structure
+# Directory Structure
 
 ```
 etl/
 ├── README.md                      # This file
 ├── TODO.md                        # Planned improvements
+├── .env                           # Environment variables (DO NOT commit)
 ├── docs/
-│   ├── ARCHITECTURE.md            # Detailed architecture documentation
+│   ├── ARCHITECTURE.md            # Detailed architecture
 │   ├── DATABRICKS_DEPLOYMENT.md   # Databricks deployment guide
 │   └── ORACLE_LONG_LIMITATIONS.md # Oracle LONG column handling
 ├── config/
-│   ├── sources.yaml               # Database configurations
-│   ├── kafka_clusters.yaml        # Kafka configurations
-│   └── *.template                 # Configuration templates
+│   ├── sources.yaml.template      # Database config template
+│   ├── kafka_clusters.yaml.template # Kafka config template
+│   ├── sources.yaml               # Your database config (DO NOT commit)
+│   └── kafka_clusters.yaml        # Your Kafka config (DO NOT commit)
 ├── lib/                           # Python library modules
-│   ├── config_loader.py           # YAML config loader
+│   ├── config_loader.py           # Configuration loader
 │   ├── status_tracker.py          # CDC status tracking
-│   ├── secrets_utils.py           # Secrets management (Databricks + env)
+│   ├── secrets_utils.py           # Secrets management
 │   ├── spark_utils.py             # Spark session factory
 │   ├── jdbc_utils.py              # JDBC connection builder
 │   ├── iceberg_utils.py           # Iceberg table manager
-│   ├── extractors/                # Database extractors
+│   ├── extractors/                # Database-specific extractors
+│   │   ├── base_extractor.py
+│   │   ├── oracle_extractor.py
+│   │   └── postgres_extractor.py
 │   └── schema_fixers/             # Schema transformation logic
+│       ├── oracle_fixer.py
+│       └── postgres_fixer.py
 ├── jobs/                          # Main entry point scripts
-│   ├── direct_bulk_load.py        # Phase 1: Initial bulk load
-│   ├── cdc_kafka_to_iceberg.py    # Phase 2: CDC streaming consumer
-│   └── validate_iceberg_tables.py # Validation and reporting
+│   ├── direct_bulk_load.py        # Phase 1: Bulk load
+│   ├── cdc_kafka_to_iceberg.py    # Phase 2: CDC consumer
+│   ├── validate_iceberg_tables.py # Validation utility
+│   └── drop_test_tables.py        # Cleanup utility
+├── jars/                          # JDBC drivers
+│   ├── ojdbc8.jar                 # Oracle JDBC driver
+│   └── postgresql-42.7.1.jar      # PostgreSQL JDBC driver
+├── venv/                          # Python virtual environment (local only)
+├── warehouse/                     # Iceberg table storage (local only)
 ├── checkpoints/                   # Spark streaming checkpoints
 └── logs/                          # Application logs
+    ├── direct_load.log
+    └── cdc_consumer.log
 ```
 
-## Security Considerations
+---
 
-### Credentials
+# Security Best Practices
 
-- **Never commit** `sources.yaml` or `kafka_clusters.yaml` with real credentials to version control
-- Use environment variables: `password: ${ENV_VAR_NAME}`
-- **Databricks**: Use Databricks Secrets (automatic detection and fallback to env vars)
-- Consider integrating with:
-  - **Databricks Secrets** (for Databricks deployments)
-  - AWS Secrets Manager
-  - HashiCorp Vault
-  - Kubernetes Secrets
+## Credentials Management
 
-### Network Security
+**Local Development:**
+- Store credentials in `.env` file (never commit)
+- Use environment variable references in `sources.yaml`: `${VAR_NAME}`
+- Set restrictive permissions: `chmod 600 .env`
 
-- Ensure firewall rules allow:
-  - JDBC access to source databases
-  - Kafka access (typically port 9092)
-  - Iceberg storage access (S3/HDFS/local filesystem)
+**Databricks Production:**
+- Use Databricks Secrets for all credentials
+- Configure secrets in Databricks workspace
+- Reference in config: `${SECRET_NAME}` (automatic fallback to env vars)
 
-### Data Access
+## .gitignore Configuration
 
-- Grant minimal required permissions:
-  - **Oracle**: SELECT on source tables, SELECT on v$database
-  - **Postgres**: SELECT on source tables, SELECT on replication catalog
-- Iceberg access control via catalog permissions
-
-## Performance Tuning
-
-### Bulk Load Optimization
-
-```bash
-# For small tables (< 1M rows)
---parallel-tables 4 --parallel-workers 8
-
-# For large tables (> 10M rows)
---parallel-tables 16 --parallel-workers 2
-
-# For mixed workload
---parallel-tables 8 --parallel-workers 4
+Ensure these files are in `.gitignore`:
+```
+.env
+config/sources.yaml
+config/kafka_clusters.yaml
+warehouse/
+logs/
+checkpoints/
+venv/
+*.pyc
+__pycache__/
 ```
 
-### Spark Memory Tuning
+## Network Security
 
-```bash
-spark-submit \
-  --driver-memory 8g \
-  --executor-memory 16g \
-  --executor-cores 4 \
-  --conf spark.driver.maxResultSize=4g \
-  --conf spark.network.timeout=800s \
-  ...
+- Use VPN or private networks for database connectivity
+- Enable TLS/SSL for database connections in production
+- Configure Kafka with SASL/SSL authentication
+- Use IAM roles for S3 access (Databricks)
+
+## Database Permissions
+
+Grant minimal required permissions:
+
+**Oracle:**
+```sql
+GRANT SELECT ON schema.* TO etl_user;
+GRANT SELECT ON v$database TO etl_user;  -- For SCN tracking
 ```
 
-### CDC Throughput Optimization
+**PostgreSQL:**
+```sql
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO etl_user;
+GRANT SELECT ON pg_catalog.pg_replication_slots TO etl_user;  -- For CDC
+```
 
-- Increase `--batch-size` for higher throughput (risk: larger memory usage)
-- Decrease trigger interval for lower latency (risk: more overhead)
-- Use Kafka partitioning to distribute load
+---
 
-## Contributing
+# Additional Resources
+
+## Documentation
+
+- [Databricks Deployment Guide](docs/DATABRICKS_DEPLOYMENT.md) - Production deployment to Databricks
+- [Architecture Documentation](docs/ARCHITECTURE.md) - Detailed system architecture
+- [Oracle LONG Limitations](docs/ORACLE_LONG_LIMITATIONS.md) - Oracle LONG column handling
+
+## External Resources
+
+- [Apache Iceberg Documentation](https://iceberg.apache.org/docs/latest/)
+- [PySpark Documentation](https://spark.apache.org/docs/latest/api/python/)
+- [Debezium Documentation](https://debezium.io/documentation/)
+- [Databricks Documentation](https://docs.databricks.com/)
+- [Databricks Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/index.html)
+- [Kafka Documentation](https://kafka.apache.org/documentation/)
+
+---
+
+# Contributing
 
 See [TODO.md](TODO.md) for planned improvements and contribution opportunities.
 
-## License
+---
+
+# License
 
 [Specify your license]
 
-## Support
+---
+
+# Support
 
 For issues, questions, or contributions:
 - Create an issue in the repository
 - Contact: [Your contact information]
-
-## Additional Resources
-
-### Documentation
-
-- [Databricks Deployment Guide](docs/DATABRICKS_DEPLOYMENT.md) - Complete guide for deploying to Databricks
-- [Architecture Documentation](docs/ARCHITECTURE.md) - Detailed system architecture
-- [Oracle LONG Limitations](docs/ORACLE_LONG_LIMITATIONS.md) - Oracle LONG column handling
-
-### External Resources
-
-- [Apache Iceberg Documentation](https://iceberg.apache.org/docs/latest/)
-- [Databricks Documentation](https://docs.databricks.com/)
-- [Databricks Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/index.html)
-- [Debezium Documentation](https://debezium.io/documentation/)
-- [PySpark Documentation](https://spark.apache.org/docs/latest/api/python/)
-- [Kafka Documentation](https://kafka.apache.org/documentation/)
