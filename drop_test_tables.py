@@ -42,20 +42,20 @@ for table_name in TEST_TABLES:
 
         # Drop the table
         spark.sql(f"DROP TABLE IF EXISTS {full_table}")
-        print(f"✓ Dropped: {table_name}")
+        print(f"Dropped: {table_name}")
 
         # Also delete from _cdc_status
         spark.sql(f"""
             DELETE FROM local.bronze.siebel._cdc_status
             WHERE table_name = '{table_name}'
         """)
-        print(f"  ✓ Removed from _cdc_status")
+        print(f"  Removed from _cdc_status")
 
     except Exception as e:
         if "Table not found" in str(e) or "cannot be found" in str(e):
-            print(f"⊘ Table does not exist: {table_name}")
+            print(f"Table does not exist: {table_name}")
         else:
-            print(f"✗ Error dropping {table_name}: {e}")
+            print(f"Error dropping {table_name}: {e}")
 
 print("\n" + "="*100)
 print("VERIFICATION - Remaining test table status entries:")

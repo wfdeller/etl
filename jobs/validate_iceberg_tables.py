@@ -201,7 +201,7 @@ def validate_tables(source_name: str, show_empty: bool = True, show_missing: boo
                         break
                 print()
             else:
-                print("✓ All source tables are present in Iceberg")
+                print("All source tables are present in Iceberg")
                 print()
             
             if extra_in_iceberg:
