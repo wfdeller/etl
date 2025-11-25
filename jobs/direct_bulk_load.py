@@ -30,6 +30,8 @@ from config_loader import get_source_config, get_kafka_config
 from status_tracker import CDCStatusTracker
 from schema_tracker import SchemaTracker
 from extractors import get_extractor
+from monitoring import MetricsCollector, StructuredLogger
+from data_quality import DataQualityChecker
 from pyspark.sql import SparkSession
 from spark_utils import SparkSessionFactory
 from jdbc_utils import DatabaseConnectionBuilder

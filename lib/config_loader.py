@@ -80,6 +80,120 @@ def _validate_primary_keys(source_name: str, source_config: Dict[str, Any]) -> N
                 )
 
 
+def _validate_bulk_load_config(source_name: str, source_config: Dict[str, Any]) -> None:
+    """
+    Validate bulk_load configuration section if present
+
+    Ensures:
+    - bulk_load is a dictionary
+    - parallel_partitions_per_table is a positive integer
+    - parallel_table_workers is a positive integer
+    - max_retries is a non-negative integer
+    - checkpoint_enabled is a boolean
+    """
+    if 'bulk_load' not in source_config:
+        return  # Optional section
+
+    bulk_load = source_config['bulk_load']
+
+    if not isinstance(bulk_load, dict):
+        raise ValueError(
+            f"Source '{source_name}': 'bulk_load' must be a dictionary, got {type(bulk_load).__name__}"
+        )
+
+    # Validate parallel_partitions_per_table
+    if 'parallel_partitions_per_table' in bulk_load:
+        partitions = bulk_load['parallel_partitions_per_table']
+        if not isinstance(partitions, int) or partitions <= 0:
+            raise ValueError(
+                f"Source '{source_name}': 'parallel_partitions_per_table' must be a positive integer, got {partitions}"
+            )
+
+    # Validate parallel_table_workers
+    if 'parallel_table_workers' in bulk_load:
+        workers = bulk_load['parallel_table_workers']
+        if not isinstance(workers, int) or workers <= 0:
+            raise ValueError(
+                f"Source '{source_name}': 'parallel_table_workers' must be a positive integer, got {workers}"
+            )
+
+    # Validate max_retries
+    if 'max_retries' in bulk_load:
+        retries = bulk_load['max_retries']
+        if not isinstance(retries, int) or retries < 0:
+            raise ValueError(
+                f"Source '{source_name}': 'max_retries' must be a non-negative integer, got {retries}"
+            )
+
+    # Validate checkpoint_enabled
+    if 'checkpoint_enabled' in bulk_load:
+        checkpoint = bulk_load['checkpoint_enabled']
+        if not isinstance(checkpoint, bool):
+            raise ValueError(
+                f"Source '{source_name}': 'checkpoint_enabled' must be a boolean, got {type(checkpoint).__name__}"
+            )
+
+
+def _validate_data_quality_config(source_name: str, source_config: Dict[str, Any]) -> None:
+    """
+    Validate data_quality configuration section if present
+
+    Ensures:
+    - data_quality is a dictionary
+    - check_row_count is a boolean
+    - row_count_tolerance is a float between 0 and 1
+    - required_columns is a list of strings (if present)
+    """
+    if 'data_quality' not in source_config:
+        return  # Optional section
+
+    data_quality = source_config['data_quality']
+
+    if not isinstance(data_quality, dict):
+        raise ValueError(
+            f"Source '{source_name}': 'data_quality' must be a dictionary, got {type(data_quality).__name__}"
+        )
+
+    # Validate check_row_count
+    if 'check_row_count' in data_quality:
+        check = data_quality['check_row_count']
+        if not isinstance(check, bool):
+            raise ValueError(
+                f"Source '{source_name}': 'check_row_count' must be a boolean, got {type(check).__name__}"
+            )
+
+    # Validate row_count_tolerance
+    if 'row_count_tolerance' in data_quality:
+        tolerance = data_quality['row_count_tolerance']
+        if not isinstance(tolerance, (int, float)) or tolerance < 0 or tolerance > 1:
+            raise ValueError(
+                f"Source '{source_name}': 'row_count_tolerance' must be a float between 0 and 1, got {tolerance}"
+            )
+
+    # Validate required_columns
+    if 'required_columns' in data_quality:
+        columns = data_quality['required_columns']
+        if not isinstance(columns, dict):
+            raise ValueError(
+                f"Source '{source_name}': 'required_columns' must be a dictionary (table -> columns), "
+                f"got {type(columns).__name__}"
+            )
+
+        for table_name, column_list in columns.items():
+            if not isinstance(column_list, list):
+                raise ValueError(
+                    f"Source '{source_name}', table '{table_name}': "
+                    f"required columns must be a list, got {type(column_list).__name__}"
+                )
+
+            for column in column_list:
+                if not isinstance(column, str):
+                    raise ValueError(
+                        f"Source '{source_name}', table '{table_name}': "
+                        f"column names must be strings, got {type(column).__name__}"
+                    )
+
+
 def get_source_config(source_name: str) -> Dict[str, Any]:
     """Get configuration for a specific source"""
     config_dir = os.environ.get('CONFIG_DIR')
@@ -92,8 +206,10 @@ def get_source_config(source_name: str) -> Dict[str, Any]:
 
     source_config = config['sources'][source_name]
 
-    # Validate primary_keys section if present
+    # Validate configuration sections
     _validate_primary_keys(source_name, source_config)
+    _validate_bulk_load_config(source_name, source_config)
+    _validate_data_quality_config(source_name, source_config)
 
     return source_config
 
