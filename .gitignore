@@ -1,0 +1,323 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ===========================
+# Project-Specific Ignores
+# ===========================
+
+# Configuration files with credentials
+config/sources.yaml
+config/kafka_clusters.yaml
+config/debezium_*.json
+
+# Keep templates
+!config/*.template
+
+# Logs
+logs/
+*.log
+
+# Checkpoints (Spark streaming)
+checkpoints/
+*.checkpoint
+
+# Iceberg warehouse data (if local)
+warehouse/
+/opt/data/lakehouse/
+
+# Spark temporary files
+spark-warehouse/
+metastore_db/
+derby.log
+
+# JDBC drivers (large binary files)
+jars/
+*.jar
+!lib/*.jar  # Allow if you want to commit specific JARs
+
+# Python cache
+*.pyc
+.pytest_cache/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Generated Debezium configs
+config/debezium_*_cdc.json
+
+# Test outputs
+test_output/
+test_results/
+
+# Coverage reports
+htmlcov/
+.coverage
+
+# Profiling data
+*.prof
+*.lprof
+
+# Database dumps
+*.sql
+*.dump
+
+# Compressed files
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+
+# Editor backup files
+*~
+*.orig
+
+# Virtual environment
+.venv/
+venv*/
+ENV/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+local_env.sh
+*_env.sh
+
+# Local development overrides
+local_config.yaml
+dev_sources.yaml
+check_status.py
+
+# Documentation build artifacts
+docs/_build/
+docs/.doctrees/
+
+# Terraform (if used for infrastructure)
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# Kubernetes secrets (if stored locally)
+k8s/secrets/
+*.secret.yaml
+
+# AWS credentials (if stored locally - shouldn't be)
+.aws/credentials
+
+# SSH keys (should never be in repo)
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+
+# SSL certificates
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# Data files (samples okay, full data should not be committed)
+data/
+*.csv
+*.parquet
+*.avro
+*.orc
+
+# Exception: small sample data for testing
+!sample_data/
+!test_data/
+
+# Backup directories
+backup/
+backups/
+*.backup/
+
+# IDE-specific
+.vscode/settings.json
+.idea/workspace.xml
+.idea/tasks.xml
+
+# OS-specific
+.Spotlight-V100
+.Trashes

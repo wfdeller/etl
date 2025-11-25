@@ -1,0 +1,55 @@
+sources:
+
+  dev_siebel:
+    database_type: oracle
+    kafka_topic_prefix: dev.siebel
+    iceberg_namespace: bronze.siebel
+
+    database_connection:
+      host: oracle.localdomain
+      port: 1521
+      service_name: DEVLPDB1
+      username: siebel
+      password: ${ORACLE_DEV_SIEBEL_PASSWORD}  # Use env var for security
+      schema: SIEBEL
+
+    bulk_load:
+      parallel_tables: 8              # Partitions per table
+      parallel_workers: 4             # Tables to process simultaneously
+      batch_size: 50000               # JDBC fetch size
+      skip_empty_tables: false
+      handle_long_columns: exclude    # Oracle: exclude | skip_table | error
+                                      # exclude: Skip LONG columns (default, recommended)
+                                      # skip_table: Skip entire table if LONG columns exist
+                                      # error: Fail job if LONG columns found
+                                      # Note: LONG columns cannot be read via Spark JDBC due to
+                                      #       Oracle subquery restrictions. See docs/ORACLE_LONG_LIMITATIONS.md
+      checkpoint_enabled: true
+      checkpoint_interval: 50         # Checkpoint every N tables
+      max_retries: 3                  # Retries per table (0 = no retry)
+      retry_backoff: 2                # Exponential backoff multiplier
+      large_table_threshold: 100000   # Rows - triggers disk persistence
+
+  prod_aurora_db1:
+    database_type: postgres
+    kafka_topic_prefix: prod.aurora.db1
+    iceberg_namespace: bronze.aurora_db1
+
+    database_connection:
+      host: aurora-cluster.us-west-2.rds.amazonaws.com
+      port: 5432
+      database: production
+      username: etl_user
+      password: ${POSTGRES_PROD_PASSWORD}  # Use env var for security
+      schema: public
+
+    bulk_load:
+      parallel_tables: 8
+      parallel_workers: 4
+      batch_size: 50000
+      skip_empty_tables: true
+      checkpoint_enabled: true
+      checkpoint_interval: 50
+      max_retries: 3
+      retry_backoff: 2
+      large_table_threshold: 100000

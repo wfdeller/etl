@@ -1,0 +1,6 @@
+kafka_clusters:
+  primary:
+    bootstrap_servers: broker.localdomain:9092
+    consumer_group_prefix: iceberg-cdc
+    auto_offset_reset: earliest
+    enable_auto_commit: false
