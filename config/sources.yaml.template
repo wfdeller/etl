@@ -1,4 +1,30 @@
+# ETL Source Configuration Template
+#
+# This file defines source database connections and ETL settings.
+# Supports both local development and Databricks deployment.
+#
+# LOCAL DEVELOPMENT:
+#   - Uses environment variables for secrets (e.g., ${ORACLE_DEV_SIEBEL_PASSWORD})
+#   - Set CATALOG_NAME and WAREHOUSE_PATH in your environment
+#   - Example: CATALOG_NAME=local, WAREHOUSE_PATH=file:///path/to/warehouse
+#
+# DATABRICKS DEPLOYMENT:
+#   - Uses Databricks Secrets for credentials (seamless fallback to env vars)
+#   - Set CATALOG_NAME to your Unity Catalog name (e.g., prod_catalog)
+#   - Set WAREHOUSE_PATH to s3://bucket/path
+#   - Configure S3 access via IAM instance profiles or Databricks cluster config
+#   - See docs/DATABRICKS_DEPLOYMENT.md for detailed migration guide
+#
+# PASSWORD FORMATS:
+#   - ${SECRET_KEY} - Databricks Secret or environment variable
+#   - ${SECRET_KEY:default} - With fallback default value
+#   - plain_text - Direct password (not recommended for production)
+
 sources:
+
+  # ============================================================================
+  # LOCAL DEVELOPMENT EXAMPLES
+  # ============================================================================
 
   dev_siebel:
     database_type: oracle
@@ -53,3 +79,80 @@ sources:
       max_retries: 3
       retry_backoff: 2
       large_table_threshold: 100000
+
+  # ============================================================================
+  # DATABRICKS DEPLOYMENT EXAMPLES
+  # ============================================================================
+
+  # Databricks with Unity Catalog and S3 storage
+  # This example shows a typical production Databricks deployment
+  databricks_prod_siebel:
+    database_type: oracle
+    kafka_topic_prefix: prod.siebel
+    iceberg_namespace: prod_catalog.bronze.siebel  # Unity Catalog: catalog.schema.table
+
+    database_connection:
+      host: oracle-prod.example.com
+      port: 1521
+      service_name: PRODDB
+      username: etl_service
+      # Databricks Secrets: stored in 'prod_etl' scope with key 'oracle_siebel_password'
+      # Falls back to ORACLE_PROD_SIEBEL_PASSWORD environment variable if not in Databricks
+      password: ${ORACLE_PROD_SIEBEL_PASSWORD}
+      schema: SIEBEL
+
+    bulk_load:
+      parallel_tables: 16               # Scale up for Databricks cluster
+      parallel_workers: 8               # More workers for larger cluster
+      batch_size: 100000                # Larger batches with more memory
+      skip_empty_tables: true
+      handle_long_columns: exclude
+      checkpoint_enabled: true
+      checkpoint_interval: 100
+      max_retries: 3
+      retry_backoff: 2
+      large_table_threshold: 1000000    # Higher threshold for cloud storage
+
+    # S3 Configuration for Databricks (optional if using cluster instance profiles)
+    # These settings are typically configured at the cluster level in Databricks
+    # but can be specified here for local MinIO testing
+    # s3_storage:
+    #   endpoint: s3.amazonaws.com      # AWS S3 (or MinIO endpoint for testing)
+    #   access_key: ${AWS_ACCESS_KEY}   # From Databricks Secrets or instance profile
+    #   secret_key: ${AWS_SECRET_KEY}   # From Databricks Secrets or instance profile
+    #   path_style_access: false        # false for AWS S3, true for MinIO
+
+  # Local development with MinIO (S3-compatible storage)
+  # Use this to test Databricks S3 functionality locally
+  local_siebel_minio:
+    database_type: oracle
+    kafka_topic_prefix: dev.siebel
+    iceberg_namespace: local.bronze.siebel
+
+    database_connection:
+      host: oracle.localdomain
+      port: 1521
+      service_name: DEVLPDB1
+      username: siebel
+      password: ${ORACLE_DEV_SIEBEL_PASSWORD}
+      schema: SIEBEL
+
+    bulk_load:
+      parallel_tables: 4
+      parallel_workers: 2
+      batch_size: 50000
+      skip_empty_tables: false
+      handle_long_columns: exclude
+      checkpoint_enabled: true
+      checkpoint_interval: 50
+      max_retries: 3
+      retry_backoff: 2
+      large_table_threshold: 100000
+
+    # MinIO S3-compatible storage configuration
+    # Set WAREHOUSE_PATH=s3a://iceberg-warehouse/dev when using MinIO
+    s3_storage:
+      endpoint: http://minio:9000        # MinIO endpoint
+      access_key: minioadmin              # MinIO default credentials
+      secret_key: minioadmin              # MinIO default credentials
+      path_style_access: true             # Required for MinIO

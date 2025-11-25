@@ -11,7 +11,9 @@ Production-grade ETL pipeline for extracting data from Oracle and PostgreSQL dat
 - **Schema Handling**: Automatic Oracle NUMBER type fixes, LONG column handling
 - **CDC Integration**: Debezium-based change capture via Kafka
 - **Status Tracking**: Built-in progress tracking in Iceberg
-- **Security**: Environment variable credential management
+- **Databricks Ready**: Seamless deployment to Databricks with Unity Catalog support
+- **Cloud Storage**: AWS S3 and MinIO (S3-compatible) support
+- **Security**: Environment variables + Databricks Secrets management
 
 ## Architecture
 
@@ -22,6 +24,33 @@ Debezium → Kafka → CDC Consumer → Iceberg (MERGE/DELETE)
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture documentation.
+
+## Deployment Options
+
+This ETL pipeline supports two deployment modes:
+
+### 1. Local Development (This Guide)
+
+- Self-managed Spark cluster
+- Local filesystem or MinIO for storage
+- Environment variable-based secrets
+- Suitable for: Development, testing, on-premises deployments
+
+### 2. Databricks Production Deployment
+
+- Managed Spark clusters with auto-scaling
+- Unity Catalog for governance
+- AWS S3 for cloud storage
+- Databricks Secrets for credential management
+- Suitable for: Production cloud deployments on AWS
+
+**Core PySpark logic works identically in both modes.** The main differences are deployment method, storage configuration, and secrets management.
+
+**For Databricks deployment, see:** [docs/DATABRICKS_DEPLOYMENT.md](docs/DATABRICKS_DEPLOYMENT.md)
+
+The sections below describe local development setup. For Databricks, skip to the deployment guide.
+
+---
 
 ## Prerequisites
 
@@ -434,25 +463,31 @@ python jobs/cdc_kafka_to_iceberg.py --source my_oracle_db
 
 ```
 etl/
-├── README.md                 # This file
-├── TODO.md                   # Planned improvements
+├── README.md                      # This file
+├── TODO.md                        # Planned improvements
 ├── docs/
-│   └── ARCHITECTURE.md       # Detailed architecture docs
+│   ├── ARCHITECTURE.md            # Detailed architecture documentation
+│   ├── DATABRICKS_DEPLOYMENT.md   # Databricks deployment guide
+│   └── ORACLE_LONG_LIMITATIONS.md # Oracle LONG column handling
 ├── config/
-│   ├── sources.yaml          # Database configurations
-│   ├── kafka_clusters.yaml   # Kafka configurations
-│   └── *.template            # Configuration templates
-├── lib/                      # Python library modules
-│   ├── config_loader.py
-│   ├── status_tracker.py
-│   ├── extractors/
-│   └── schema_fixers/
-├── jobs/                     # Main entry point scripts
-│   ├── direct_bulk_load.py
-│   ├── cdc_kafka_to_iceberg.py
-│   └── validate_iceberg_tables.py
-├── checkpoints/              # Spark streaming checkpoints
-└── logs/                     # Application logs
+│   ├── sources.yaml               # Database configurations
+│   ├── kafka_clusters.yaml        # Kafka configurations
+│   └── *.template                 # Configuration templates
+├── lib/                           # Python library modules
+│   ├── config_loader.py           # YAML config loader
+│   ├── status_tracker.py          # CDC status tracking
+│   ├── secrets_utils.py           # Secrets management (Databricks + env)
+│   ├── spark_utils.py             # Spark session factory
+│   ├── jdbc_utils.py              # JDBC connection builder
+│   ├── iceberg_utils.py           # Iceberg table manager
+│   ├── extractors/                # Database extractors
+│   └── schema_fixers/             # Schema transformation logic
+├── jobs/                          # Main entry point scripts
+│   ├── direct_bulk_load.py        # Phase 1: Initial bulk load
+│   ├── cdc_kafka_to_iceberg.py    # Phase 2: CDC streaming consumer
+│   └── validate_iceberg_tables.py # Validation and reporting
+├── checkpoints/                   # Spark streaming checkpoints
+└── logs/                          # Application logs
 ```
 
 ## Security Considerations
@@ -461,7 +496,9 @@ etl/
 
 - **Never commit** `sources.yaml` or `kafka_clusters.yaml` with real credentials to version control
 - Use environment variables: `password: ${ENV_VAR_NAME}`
+- **Databricks**: Use Databricks Secrets (automatic detection and fallback to env vars)
 - Consider integrating with:
+  - **Databricks Secrets** (for Databricks deployments)
   - AWS Secrets Manager
   - HashiCorp Vault
   - Kubernetes Secrets
@@ -529,7 +566,17 @@ For issues, questions, or contributions:
 
 ## Additional Resources
 
+### Documentation
+
+- [Databricks Deployment Guide](docs/DATABRICKS_DEPLOYMENT.md) - Complete guide for deploying to Databricks
+- [Architecture Documentation](docs/ARCHITECTURE.md) - Detailed system architecture
+- [Oracle LONG Limitations](docs/ORACLE_LONG_LIMITATIONS.md) - Oracle LONG column handling
+
+### External Resources
+
 - [Apache Iceberg Documentation](https://iceberg.apache.org/docs/latest/)
+- [Databricks Documentation](https://docs.databricks.com/)
+- [Databricks Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/index.html)
 - [Debezium Documentation](https://debezium.io/documentation/)
 - [PySpark Documentation](https://spark.apache.org/docs/latest/api/python/)
 - [Kafka Documentation](https://kafka.apache.org/documentation/)

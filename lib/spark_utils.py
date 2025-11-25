@@ -1,12 +1,16 @@
 """
 Spark session utilities for ETL pipeline
 Provides centralized SparkSession creation with consistent configuration
+Supports local development, Databricks, and S3/MinIO object storage
 """
 
 import os
+import logging
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pyspark.sql import SparkSession
+
+logger = logging.getLogger(__name__)
 
 
 class SparkSessionFactory:
@@ -23,11 +27,26 @@ class SparkSessionFactory:
     # Kafka package (maven coordinates)
     KAFKA_PACKAGE = 'org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0'
 
+    # Hadoop AWS package for S3 support
+    HADOOP_AWS_PACKAGE = 'org.apache.hadoop:hadoop-aws:3.3.4'
+
+    @staticmethod
+    def is_databricks_environment() -> bool:
+        """
+        Detect if running in Databricks environment
+
+        Returns:
+            bool: True if running in Databricks
+        """
+        return 'DATABRICKS_RUNTIME_VERSION' in os.environ
+
     @classmethod
     def create(cls,
                app_name: str,
                db_type: Optional[str] = None,
                enable_kafka: bool = False,
+               enable_s3: bool = False,
+               s3_config: Optional[Dict[str, str]] = None,
                jar_dir: Optional[Path] = None,
                performance_tuning: bool = True,
                local_mode: bool = True) -> SparkSession:
@@ -38,6 +57,8 @@ class SparkSessionFactory:
             app_name: Application name for Spark UI
             db_type: Database type ('oracle', 'postgres', or None for Iceberg-only)
             enable_kafka: Whether to include Kafka support
+            enable_s3: Whether to configure S3/MinIO support
+            s3_config: S3 configuration dict with keys: endpoint, access_key, secret_key, path_style_access
             jar_dir: Custom JAR directory (default: PROJECT_ROOT/jars)
             performance_tuning: Apply performance tuning configs
             local_mode: Configure for local development (bind address)
@@ -47,6 +68,24 @@ class SparkSessionFactory:
 
         Raises:
             ValueError: If required environment variables are missing
+
+        Examples:
+            # Local development with Iceberg
+            spark = SparkSessionFactory.create("MyApp")
+
+            # Databricks with Unity Catalog (auto-detected)
+            spark = SparkSessionFactory.create("MyApp")
+
+            # Local with MinIO/S3
+            spark = SparkSessionFactory.create(
+                "MyApp",
+                enable_s3=True,
+                s3_config={
+                    "endpoint": "http://minio:9000",
+                    "access_key": "minioadmin",
+                    "secret_key": "minioadmin"
+                }
+            )
         """
 
         # Validate required environment variables
@@ -63,9 +102,15 @@ class SparkSessionFactory:
         # Add JARs and classpath
         cls._add_jars_and_classpath(builder, db_type, jar_dir)
 
-        # Add Kafka package if needed
+        # Add packages if needed (Kafka and/or S3)
+        packages = []
         if enable_kafka:
-            builder.config("spark.jars.packages", cls.KAFKA_PACKAGE)
+            packages.append(cls.KAFKA_PACKAGE)
+        if enable_s3:
+            packages.append(cls.HADOOP_AWS_PACKAGE)
+
+        if packages:
+            builder.config("spark.jars.packages", ",".join(packages))
 
         # Add local mode configuration
         if local_mode:
@@ -73,6 +118,10 @@ class SparkSessionFactory:
 
         # Add Iceberg configuration
         cls._add_iceberg_config(builder, catalog_name, warehouse_path)
+
+        # Add S3 configuration if needed
+        if enable_s3 and s3_config:
+            cls._add_s3_config(builder, s3_config)
 
         # Add performance tuning
         if performance_tuning:
@@ -147,6 +196,32 @@ class SparkSessionFactory:
             f"spark.sql.catalog.{catalog_name}.warehouse",
             warehouse_path
         )
+
+    @staticmethod
+    def _add_s3_config(builder: SparkSession.builder, s3_config: Dict[str, str]) -> None:
+        """Add S3/MinIO configuration"""
+        # Set S3A endpoint (for MinIO or custom S3-compatible storage)
+        if 'endpoint' in s3_config:
+            builder.config("spark.hadoop.fs.s3a.endpoint", s3_config['endpoint'])
+
+        # Set S3A credentials
+        if 'access_key' in s3_config:
+            builder.config("spark.hadoop.fs.s3a.access.key", s3_config['access_key'])
+        if 'secret_key' in s3_config:
+            builder.config("spark.hadoop.fs.s3a.secret.key", s3_config['secret_key'])
+
+        # Path style access (required for MinIO, optional for AWS S3)
+        path_style = s3_config.get('path_style_access', 'true')
+        builder.config("spark.hadoop.fs.s3a.path.style.access", path_style)
+
+        # S3A filesystem implementation
+        builder.config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+
+        # Connection settings for better reliability
+        builder.config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")  # MinIO default
+        builder.config("spark.hadoop.fs.s3a.attempts.maximum", "3")
+        builder.config("spark.hadoop.fs.s3a.connection.establish.timeout", "5000")
+        builder.config("spark.hadoop.fs.s3a.connection.timeout", "200000")
 
     @staticmethod
     def _add_performance_config(builder: SparkSession.builder) -> None:
