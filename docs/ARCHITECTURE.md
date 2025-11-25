@@ -119,6 +119,46 @@ etl/
 └── docs/                     # Documentation
 ```
 
+### Schema Change Tracking
+
+**Purpose**: Notify transformation developers when source database schemas evolve (columns added/removed/type changed)
+
+**Problem**: Current implementation silently merges schema changes during CDC writes. Transformation developers building silver/gold layers have no visibility when bronze table schemas change, leading to broken pipelines.
+
+**Architecture**:
+
+**Audit Table**: `{catalog}.{namespace}._schema_changes`
+- Tracks: table_name, change_timestamp, change_type, schema_before, schema_after, column_name
+- Created automatically by SchemaTracker on first use
+- Queryable via Spark SQL for reporting
+
+**Detection Points**:
+1. **Bulk Load** (jobs/direct_bulk_load.py:179):
+   - New table: Records baseline schema (version 1), no notification
+   - Existing table: Compares schemas, notifies if different (re-load scenario)
+
+2. **CDC Processing** (jobs/cdc_kafka_to_iceberg.py:165):
+   - Before mergeSchema write: Compares incoming vs existing schema
+   - Always notifies on changes (primary detection point)
+
+**Notification Flow**:
+- SchemaTracker detects change → Records in _schema_changes table
+- SchemaChangeNotifier sends alerts via configured channels (email/Slack/SNS)
+- Updates notification_sent flag and timestamp
+
+**Unity Catalog Integration**:
+- Stores schema version in table properties (ALTER TABLE SET TBLPROPERTIES)
+- Correlates changes with Iceberg snapshot IDs
+- Uses information_schema for validation
+
+**Query Example**:
+```sql
+SELECT table_name, change_type, change_timestamp, column_name
+FROM local.bronze.siebel._schema_changes
+WHERE change_timestamp > current_date() - INTERVAL 30 DAYS
+ORDER BY change_timestamp DESC;
+```
+
 ## Data Flow
 
 ### Phase 1: Bulk Load
@@ -506,14 +546,14 @@ See [TODO.md](../TODO.md) for complete list of planned improvements.
 **High Priority**:
 1. Explicit primary key configuration
 2. Idempotency for bulk loads
-3. Schema evolution handling
+3. Schema change tracking and notification (see Schema Change Tracking section above)
 4. Metrics and monitoring
 5. Integration tests
 
 **Architecture Evolution**:
 1. Move to S3/HDFS for Iceberg storage
 2. Implement exactly-once CDC semantics
-3. Add schema registry integration
+3. Unity Catalog as schema registry (Databricks deployment)
 4. Distributed status tracking (beyond single table)
 5. Multi-region replication
 

@@ -119,13 +119,21 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 
 ## Long Term (Future Enhancements)
 
+### Schema Change Tracking & Notification
+- [TODO] Implement schema change tracking for transformation developers
+  - Create `lib/schema_tracker.py` - SchemaTracker class with `_schema_changes` audit table
+  - Modify `jobs/direct_bulk_load.py` (line 179) - Establish baseline schema for new tables
+  - Modify `jobs/cdc_kafka_to_iceberg.py` (line 165) - Detect and notify on schema changes
+  - Create `lib/notification_handler.py` - Email/Slack/SNS notifications (Phase 2)
+  - Update `config/sources.yaml.template` - Add notification configuration
+  - Create `jobs/query_schema_changes.py` - Query audit table CLI tool
+  - Create `docs/SCHEMA_CHANGE_TRACKING.md` - User documentation
+  - **Files**: See architectural overview in ARCHITECTURE.md
+
 ### Schema Evolution
-- [TODO] Implement schema management using Unity Catalog
-  - Use Unity Catalog's information_schema to detect schema changes
-  - Leverage Iceberg's built-in schema evolution (add/drop/rename columns)
-  - Query Unity Catalog table history for schema version tracking
-  - Store schema metadata in Unity Catalog table properties and tags
-  - Validate compatibility before applying changes using Iceberg metadata
+- [TODO] Enhance schema management (depends on Schema Change Tracking above)
+  - Leverage Iceberg's built-in schema evolution
+  - Validate compatibility before applying changes
   - Use Unity Catalog's column-level lineage for impact analysis
 
 ### Exactly-Once Semantics
