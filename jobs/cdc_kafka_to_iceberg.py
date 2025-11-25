@@ -26,6 +26,8 @@ from pyspark.sql.types import StructType, StructField, StringType, LongType, Tim
 
 from config_loader import get_source_config, get_kafka_config
 from status_tracker import CDCStatusTracker
+from spark_utils import SparkSessionFactory
+from iceberg_utils import IcebergTableManager
 
 # Configure logging
 log_dir = PROJECT_ROOT / 'logs'
@@ -42,27 +44,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_spark_session(app_name: str) -> SparkSession:
-    """Create Spark session with Kafka and Iceberg support"""
-
-    # Required environment variables
-    catalog_name = os.environ.get('CATALOG_NAME')
-    if not catalog_name:
-        raise ValueError("CATALOG_NAME environment variable must be set")
-
-    warehouse_path = os.environ.get('WAREHOUSE_PATH')
-    if not warehouse_path:
-        raise ValueError("WAREHOUSE_PATH environment variable must be set")
-
-    return SparkSession.builder \
-        .appName(app_name) \
-        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-        .config(f"spark.sql.catalog.{catalog_name}", "org.apache.iceberg.spark.SparkCatalog") \
-        .config(f"spark.sql.catalog.{catalog_name}.type", "hadoop") \
-        .config(f"spark.sql.catalog.{catalog_name}.warehouse", warehouse_path) \
-        .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
-        .config("spark.sql.adaptive.enabled", "true") \
-        .getOrCreate()
+# Spark session creation moved to SparkSessionFactory.create()
 
 
 def get_starting_position(spark: SparkSession, tracker: CDCStatusTracker, db_type: str) -> Dict[str, Optional[int]]:
@@ -145,46 +127,9 @@ def get_table_scn_map(tracker: CDCStatusTracker) -> Dict[str, int]:
         return {}
 
 
-def ensure_table_exists(spark: SparkSession, namespace: str, table_name: str, sample_data: dict) -> bool:
-    """
-    Ensure Iceberg table exists, create if not
-
-    Args:
-        spark: SparkSession
-        namespace: Iceberg namespace
-        table_name: Table name
-        sample_data: Sample record to infer schema
-
-    Returns:
-        bool: True if table exists or was created
-    """
-
-    catalog_name = os.environ.get('CATALOG_NAME')
-    if not catalog_name:
-        raise ValueError("CATALOG_NAME environment variable must be set")
-
-    iceberg_table = f"{catalog_name}.{namespace}.{table_name}"
-
-    try:
-        # Check if table exists
-        spark.table(iceberg_table)
-        return True
-    except:
-        # Table doesn't exist - create it
-        logger.info(f"Creating new table {iceberg_table} from CDC event")
-
-        try:
-            # Create DataFrame from sample data to infer schema
-            df = spark.createDataFrame([sample_data])
-            df.writeTo(iceberg_table).using("iceberg").create()
-
-            logger.info(f"Created new table {iceberg_table} with {len(sample_data)} columns")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to create table {iceberg_table}: {e}")
-            return False
+# Iceberg table operations moved to IcebergTableManager
         
-def apply_cdc_event(spark: SparkSession, namespace: str, table_name: str,
+def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, namespace: str, table_name: str,
                     operation: str, before: dict, after: dict,
                     tracker: CDCStatusTracker = None, db_type: str = None,
                     event_scn: int = None):
@@ -193,6 +138,7 @@ def apply_cdc_event(spark: SparkSession, namespace: str, table_name: str,
 
     Args:
         spark: SparkSession
+        iceberg_mgr: IcebergTableManager instance
         namespace: Iceberg namespace
         table_name: Target table name
         operation: 'c' (create/insert), 'u' (update), 'd' (delete), 'r' (read/snapshot)
@@ -203,20 +149,16 @@ def apply_cdc_event(spark: SparkSession, namespace: str, table_name: str,
         event_scn: SCN/LSN of this event
     """
 
-    catalog_name = os.environ.get('CATALOG_NAME')
-    if not catalog_name:
-        raise ValueError("CATALOG_NAME environment variable must be set")
+    iceberg_table = iceberg_mgr.get_full_table_name(namespace, table_name)
 
-    iceberg_table = f"{catalog_name}.{namespace}.{table_name}"
-    
     # Determine sample data for schema inference
     sample_data = after or before
     if not sample_data:
         logger.warning(f"No data in CDC event for {table_name}, skipping")
         return
-    
+
     # Ensure table exists (auto-create for new tables)
-    if not ensure_table_exists(spark, namespace, table_name, sample_data):
+    if not iceberg_mgr.ensure_table_exists(namespace, table_name, sample_data):
         logger.error(f"Could not ensure table {table_name} exists, skipping event")
         return
     
@@ -303,7 +245,7 @@ def init_known_tables_cache(tracker: CDCStatusTracker):
         _known_tables_cache = set()        
 
 
-def process_kafka_batch(spark: SparkSession, kafka_config: dict, source_config: dict,
+def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, kafka_config: dict, source_config: dict,
                         tracker: CDCStatusTracker, table_scn_map: Dict[str, int],
                         batch_size: int = 1000):
     """
@@ -396,7 +338,7 @@ def process_kafka_batch(spark: SparkSession, kafka_config: dict, source_config: 
 
                 # Apply the CDC event
                 apply_cdc_event(
-                    spark, namespace, table_name, operation, before, after,
+                    spark, iceberg_mgr, namespace, table_name, operation, before, after,
                     tracker=tracker, db_type=db_type, event_scn=event_scn
                 )
                 events_processed += 1
@@ -451,10 +393,11 @@ def run_cdc_consumer(source_name: str, batch_size: int = 1000):
     logger.info(f"Target namespace: {namespace}")
     logger.info(f"Kafka bootstrap: {kafka_config['bootstrap_servers']}")
     
-    # Create Spark session
-    spark = create_spark_session(f"CDC-Consumer-{source_name}")
+    # Create Spark session with Kafka support
+    spark = SparkSessionFactory.create(f"CDC-Consumer-{source_name}", db_type=None, enable_kafka=True)
 
-    # Initialize status tracker
+    # Initialize utilities
+    iceberg_mgr = IcebergTableManager(spark)
     tracker = CDCStatusTracker(spark, namespace)
 
     # Initialize known tables cache
@@ -476,7 +419,7 @@ def run_cdc_consumer(source_name: str, batch_size: int = 1000):
     # Start processing
     try:
         query = process_kafka_batch(
-            spark, kafka_config, source_config, tracker, table_scn_map, batch_size
+            spark, iceberg_mgr, kafka_config, source_config, tracker, table_scn_map, batch_size
         )
         
         logger.info("CDC Consumer started. Press Ctrl+C to stop.")

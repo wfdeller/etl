@@ -30,6 +30,9 @@ from config_loader import get_source_config, get_kafka_config
 from status_tracker import CDCStatusTracker
 from extractors import get_extractor
 from pyspark.sql import SparkSession
+from spark_utils import SparkSessionFactory
+from jdbc_utils import DatabaseConnectionBuilder
+from iceberg_utils import IcebergTableManager
 
 # Configure logging
 log_dir = PROJECT_ROOT / 'logs'
@@ -49,100 +52,13 @@ logger = logging.getLogger(__name__)
 write_lock = Lock()
 
 
-def validate_config(source_config: dict, source_name: str):
-    """Validate that all required configuration is present"""
-    
-    required_top_level = ['database_type', 'kafka_topic_prefix', 'iceberg_namespace', 'database_connection']
-    
-    for key in required_top_level:
-        if key not in source_config:
-            raise ValueError(f"Missing required config key '{key}' in source '{source_name}'")
-    
-    # Validate database_connection
-    db_config = source_config['database_connection']
-    db_type = source_config['database_type']
-    
-    if db_type == 'oracle':
-        required_db_keys = ['host', 'port', 'service_name', 'username', 'password', 'schema']
-        for key in required_db_keys:
-            if key not in db_config:
-                raise ValueError(f"Missing required database_connection key '{key}' for Oracle source '{source_name}'")
-    
-    elif db_type == 'postgres':
-        required_db_keys = ['host', 'port', 'database', 'username', 'password', 'schema']
-        for key in required_db_keys:
-            if key not in db_config:
-                raise ValueError(f"Missing required database_connection key '{key}' for Postgres source '{source_name}'")
-    
-    else:
-        raise ValueError(f"Unsupported database_type '{db_type}' for source '{source_name}'. Must be 'oracle' or 'postgres'")
-    
-    logger.info(f"Configuration validated successfully for source '{source_name}'")
+# Validation moved to DatabaseConnectionBuilder.validate_config()
 
 
-def create_spark_session(app_name: str, db_type: str) -> SparkSession:
-    """Create Spark session with appropriate JDBC driver"""
-
-    # Required environment variables
-    catalog_name = os.environ.get('CATALOG_NAME')
-    if not catalog_name:
-        raise ValueError("CATALOG_NAME environment variable must be set")
-
-    warehouse_path = os.environ.get('WAREHOUSE_PATH')
-    if not warehouse_path:
-        raise ValueError("WAREHOUSE_PATH environment variable must be set")
-
-    # Build list of required JARs
-    jars = [str(PROJECT_ROOT / 'jars' / 'iceberg-spark-runtime.jar')]
-
-    if db_type == 'oracle':
-        jars.append(str(PROJECT_ROOT / 'jars' / 'ojdbc8.jar'))
-    elif db_type == 'postgres':
-        jars.append(str(PROJECT_ROOT / 'jars' / 'postgresql.jar'))
-
-    # Use extraClassPath for proper driver loading when running via python directly
-    classpath = ":".join(jars)
-
-    builder = SparkSession.builder \
-        .appName(app_name) \
-        .config("spark.jars", ",".join(jars)) \
-        .config("spark.driver.extraClassPath", classpath) \
-        .config("spark.executor.extraClassPath", classpath) \
-        .config("spark.driver.bindAddress", "127.0.0.1") \
-        .config("spark.driver.host", "localhost") \
-        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-        .config(f"spark.sql.catalog.{catalog_name}", "org.apache.iceberg.spark.SparkCatalog") \
-        .config(f"spark.sql.catalog.{catalog_name}.type", "hadoop") \
-        .config(f"spark.sql.catalog.{catalog_name}.warehouse", warehouse_path) \
-        .config("spark.sql.adaptive.enabled", "true") \
-        .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-        .config("spark.driver.maxResultSize", "2g") \
-        .config("spark.rpc.message.maxSize", "256") \
-        .config("spark.network.timeout", "600s") \
-        .config("spark.executor.heartbeatInterval", "60s")
-
-    return builder.getOrCreate()
+# Spark session creation moved to SparkSessionFactory.create()
 
 
-def get_database_connection_string(source_config: dict) -> dict:
-    """Build JDBC connection details from source config"""
-    
-    db_type = source_config['database_type']
-    db_config = source_config['database_connection']
-    
-    if db_type == 'oracle':
-        jdbc_url = f"jdbc:oracle:thin:@{db_config['host']}:{db_config['port']}/{db_config['service_name']}"
-    elif db_type == 'postgres':
-        jdbc_url = f"jdbc:postgresql://{db_config['host']}:{db_config['port']}/{db_config['database']}"
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
-    
-    return {
-        'url': jdbc_url,
-        'user': db_config['username'],
-        'password': db_config['password'],
-        'schema': db_config['schema']
-    }
+# JDBC connection building moved to DatabaseConnectionBuilder.build_jdbc_config()
 
 
 def get_scn_or_lsn(spark: SparkSession, jdbc_config: dict, db_type: str) -> dict:
@@ -192,32 +108,9 @@ def get_completed_tables(tracker: CDCStatusTracker) -> set:
         return set()
 
 
-def write_to_iceberg(df, table_name: str, namespace: str):
-    """Write DataFrame to Iceberg table - types should already be fixed"""
+# Iceberg table writing moved to IcebergTableManager.write_table()
 
-    catalog_name = os.environ.get('CATALOG_NAME')
-    if not catalog_name:
-        raise ValueError("CATALOG_NAME environment variable must be set")
-
-    iceberg_table = f"{catalog_name}.{namespace}.{table_name}"
-    
-    try:
-        # Check if table exists
-        df._jdf.sparkSession().table(iceberg_table)
-        table_exists = True
-    except:
-        table_exists = False
-    
-    if table_exists:
-        logger.warning(f"Table {iceberg_table} already exists, appending...")
-        df.writeTo(iceberg_table).option("mergeSchema", "true").append()
-    else:
-        logger.info(f"Creating table {iceberg_table}")
-        df.writeTo(iceberg_table).using("iceberg").create()
-    
-    logger.info(f"Written to {iceberg_table}")
-
-def process_single_table(table_name: str, extractor, tracker, namespace: str,
+def process_single_table(table_name: str, extractor, tracker, iceberg_mgr, namespace: str,
                         jdbc_config: dict, scn_lsn: dict, parallel_tables: int,
                         skip_empty: bool, max_retries: int, retry_backoff: int,
                         tables_with_long: dict):
@@ -260,7 +153,7 @@ def process_single_table(table_name: str, extractor, tracker, namespace: str,
                     logger.info(f"{table_name}: Creating empty table {table_name} with schema only")
                     # df already has the schema, just write it
                     with write_lock:
-                        write_to_iceberg(df, table_name, namespace)
+                        iceberg_mgr.write_table(df, namespace, table_name)
 
                     # Record completion with 0 records
                     with write_lock:
@@ -285,7 +178,7 @@ def process_single_table(table_name: str, extractor, tracker, namespace: str,
 
             # Write to Iceberg
             with write_lock:
-                write_to_iceberg(df, table_name, namespace)
+                iceberg_mgr.write_table(df, namespace, table_name)
 
             # Unpersist if it was persisted
             if metadata.get('persisted'):
@@ -407,9 +300,10 @@ def direct_bulk_load(
     
     # Load configuration
     source_config = get_source_config(source_name)
-    
+
     # Validate configuration
-    validate_config(source_config, source_name)
+    DatabaseConnectionBuilder.validate_config(source_config, source_name)
+    logger.info(f"Configuration validated successfully for source '{source_name}'")
     
     db_type = source_config['database_type']
     namespace = source_config['iceberg_namespace']
@@ -437,18 +331,19 @@ def direct_bulk_load(
     logger.info(f"Checkpoint/Resume: {checkpoint_enabled}")
     
     # Create Spark session
-    spark = create_spark_session(f"BulkLoad-{source_name}", db_type)
+    spark = SparkSessionFactory.create(f"BulkLoad-{source_name}", db_type)
 
     # Get catalog name from environment
     catalog = os.environ.get('CATALOG_NAME')
     if not catalog:
         raise ValueError("CATALOG_NAME environment variable must be set")
 
-    # Initialize status tracker
+    # Initialize utilities
+    iceberg_mgr = IcebergTableManager(spark, catalog)
     tracker = CDCStatusTracker(spark, namespace, catalog)
-    
+
     # Get JDBC connection details
-    jdbc_config = get_database_connection_string(source_config)
+    jdbc_config = DatabaseConnectionBuilder.build_jdbc_config(source_config)
     
     # STEP 1: Capture SCN/LSN BEFORE starting load
     scn_lsn = get_scn_or_lsn(spark, jdbc_config, db_type)
@@ -493,7 +388,7 @@ def direct_bulk_load(
             logger.info(f"Table {i}/{len(tables_to_process)}: {table_name}")
             
             success, table, records, error = process_single_table(
-                table_name, extractor, tracker, namespace, jdbc_config,
+                table_name, extractor, tracker, iceberg_mgr, namespace, jdbc_config,
                 scn_lsn, parallel_tables, skip_empty, max_retries,
                 retry_backoff, tables_with_long
             )
@@ -510,7 +405,7 @@ def direct_bulk_load(
             futures = {
                 executor.submit(
                     process_single_table,
-                    table_name, extractor, tracker, namespace, jdbc_config,
+                    table_name, extractor, tracker, iceberg_mgr, namespace, jdbc_config,
                     scn_lsn, parallel_tables, skip_empty, max_retries,
                     retry_backoff, tables_with_long
                 ): table_name
@@ -736,7 +631,7 @@ def main():
                 raise ValueError("CATALOG_NAME environment variable must be set")
 
             # Create minimal Spark session for dropping tables
-            spark = create_spark_session(f"FreshStart-{args.source}", db_type)
+            spark = SparkSessionFactory.create(f"FreshStart-{args.source}", db_type)
 
             # Drop all tables
             if not drop_namespace_tables(spark, namespace, catalog, args.yes):

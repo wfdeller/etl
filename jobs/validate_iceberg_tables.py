@@ -18,27 +18,10 @@ PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 sys.path.insert(0, str(PROJECT_ROOT / 'lib'))
 
 from config_loader import get_source_config
+from spark_utils import SparkSessionFactory
 
 
-def create_spark_session():
-    """Create Spark session for Iceberg"""
-
-    # Required environment variables
-    catalog_name = os.environ.get('CATALOG_NAME')
-    if not catalog_name:
-        raise ValueError("CATALOG_NAME environment variable must be set")
-
-    warehouse_path = os.environ.get('WAREHOUSE_PATH')
-    if not warehouse_path:
-        raise ValueError("WAREHOUSE_PATH environment variable must be set")
-
-    return SparkSession.builder \
-        .appName("Validate-Iceberg-Tables") \
-        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-        .config(f"spark.sql.catalog.{catalog_name}", "org.apache.iceberg.spark.SparkCatalog") \
-        .config(f"spark.sql.catalog.{catalog_name}.type", "hadoop") \
-        .config(f"spark.sql.catalog.{catalog_name}.warehouse", warehouse_path) \
-        .getOrCreate()
+# Spark session creation moved to SparkSessionFactory.create()
 
 
 def validate_tables(source_name: str, show_empty: bool = True, show_missing: bool = True):
@@ -63,7 +46,7 @@ def validate_tables(source_name: str, show_empty: bool = True, show_missing: boo
     db_type = source_config['database_type']
     
     # Create Spark session
-    spark = create_spark_session()
+    spark = SparkSessionFactory.create("Validate-Iceberg-Tables")
     
     # Get all tables in namespace
     print(f"Scanning namespace: {namespace}")
