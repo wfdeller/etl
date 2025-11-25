@@ -35,16 +35,20 @@ from jdbc_utils import DatabaseConnectionBuilder
 from iceberg_utils import IcebergTableManager
 
 # Configure logging
-log_dir = PROJECT_ROOT / 'logs'
-log_dir.mkdir(exist_ok=True)
+# For Databricks: use StreamHandler only (logs captured by driver)
+# For local dev: add FileHandler if LOG_DIR is set
+handlers = [logging.StreamHandler()]
+
+log_dir_env = os.environ.get('LOG_DIR')
+if log_dir_env:
+    log_dir = Path(log_dir_env)
+    log_dir.mkdir(exist_ok=True, parents=True)
+    handlers.append(logging.FileHandler(log_dir / 'direct_load.log'))
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [%(threadName)s] - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_dir / 'direct_load.log'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers
 )
 logger = logging.getLogger(__name__)
 
@@ -560,20 +564,38 @@ def drop_namespace_tables(spark: SparkSession, namespace: str, catalog: str, aut
 
 
 def clear_checkpoint_directory(namespace: str):
-    """Clear checkpoint directory for the namespace"""
-    checkpoint_dir = PROJECT_ROOT / 'checkpoints' / namespace
+    """
+    Clear checkpoint directory for the namespace
+    Note: Only works for local file:// paths, not cloud storage (s3://, dbfs://)
+    For cloud storage, manually delete checkpoints via cloud console or dbfs commands
+    """
+    # Use CHECKPOINT_PATH env var (supports s3://, dbfs://, file://)
+    checkpoint_base = os.environ.get('CHECKPOINT_PATH', str(PROJECT_ROOT / 'checkpoints'))
+    checkpoint_dir_str = f"{checkpoint_base}/{namespace}"
 
-    if checkpoint_dir.exists():
-        try:
-            shutil.rmtree(checkpoint_dir)
-            logger.info(f"Cleared checkpoint directory: {checkpoint_dir}")
+    # Only attempt deletion for local file paths
+    if checkpoint_base.startswith('file://') or not ('://' in checkpoint_base):
+        # Convert to Path for local filesystem operations
+        if checkpoint_base.startswith('file://'):
+            checkpoint_base = checkpoint_base[7:]  # Remove file:// prefix
+
+        checkpoint_dir = Path(checkpoint_base) / namespace
+
+        if checkpoint_dir.exists():
+            try:
+                shutil.rmtree(checkpoint_dir)
+                logger.info(f"Cleared checkpoint directory: {checkpoint_dir}")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to clear checkpoint directory: {e}")
+                return False
+        else:
+            logger.info(f"No checkpoint directory to clear: {checkpoint_dir}")
             return True
-        except Exception as e:
-            logger.warning(f"Failed to clear checkpoint directory: {e}")
-            return False
     else:
-        logger.info(f"No checkpoint directory to clear: {checkpoint_dir}")
-        return True
+        logger.warning(f"Cannot auto-clear cloud checkpoint location: {checkpoint_dir_str}")
+        logger.warning(f"Please manually delete checkpoints using cloud tools (aws s3 rm, dbfs rm, etc.)")
+        return False
 
 
 def main():

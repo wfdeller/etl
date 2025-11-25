@@ -30,16 +30,20 @@ from spark_utils import SparkSessionFactory
 from iceberg_utils import IcebergTableManager
 
 # Configure logging
-log_dir = PROJECT_ROOT / 'logs'
-log_dir.mkdir(exist_ok=True)
+# For Databricks: use StreamHandler only (logs captured by driver)
+# For local dev: add FileHandler if LOG_DIR is set
+handlers = [logging.StreamHandler()]
+
+log_dir_env = os.environ.get('LOG_DIR')
+if log_dir_env:
+    log_dir = Path(log_dir_env)
+    log_dir.mkdir(exist_ok=True, parents=True)
+    handlers.append(logging.FileHandler(log_dir / 'cdc_consumer.log'))
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [%(threadName)s] - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_dir / 'cdc_consumer.log'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers
 )
 logger = logging.getLogger(__name__)
 
@@ -295,7 +299,8 @@ def init_known_tables_cache(tracker: CDCStatusTracker):
         tables = [row.table_name for row in status_df.select("table_name").collect()]
         _known_tables_cache = set(tables)
         logger.info(f"Initialized known tables cache with {len(_known_tables_cache)} tables")
-    except:
+    except Exception as e:
+        logger.warning(f"Could not initialize known tables cache: {e}")
         _known_tables_cache = set()        
 
 
@@ -415,10 +420,16 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
 
 
     # Start streaming query
-    checkpoint_dir = PROJECT_ROOT / 'checkpoints' / namespace
+    # Use CHECKPOINT_PATH env var (supports s3://, dbfs://, file://)
+    # Falls back to local path for development
+    checkpoint_base = os.environ.get('CHECKPOINT_PATH', str(PROJECT_ROOT / 'checkpoints'))
+    checkpoint_dir = f"{checkpoint_base}/{namespace}"
+
+    logger.info(f"Using checkpoint location: {checkpoint_dir}")
+
     query = kafka_df.writeStream \
         .foreachBatch(process_batch) \
-        .option("checkpointLocation", str(checkpoint_dir)) \
+        .option("checkpointLocation", checkpoint_dir) \
         .trigger(processingTime="10 seconds") \
         .start()
     

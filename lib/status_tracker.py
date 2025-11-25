@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType, TimestampType, ArrayType
+from pyspark.sql.utils import AnalysisException
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,11 @@ class CDCStatusTracker:
     - last_processed_timestamp: timestamp
     - error_message: string
     """
-    
+
     def __init__(self, spark: SparkSession, namespace: str, catalog: str = 'local'):
         """
         Initialize status tracker
-        
+
         Args:
             spark: SparkSession
             namespace: Iceberg namespace (e.g., 'bronze.siebel')
@@ -42,41 +43,67 @@ class CDCStatusTracker:
         self.catalog = catalog
         self.namespace = namespace
         self.status_table = f"{catalog}.{namespace}._cdc_status"
-        
+
         # Create status table if it doesn't exist
         self._create_status_table_if_not_exists()
+
+    @staticmethod
+    def _get_status_schema() -> StructType:
+        """
+        Get the standard status table schema
+
+        Returns:
+            StructType: Status table schema
+        """
+        return StructType([
+            StructField('table_name', StringType(), False),
+            StructField('load_status', StringType(), True),
+            StructField('initial_load_start', TimestampType(), True),
+            StructField('initial_load_end', TimestampType(), True),
+            StructField('record_count', IntegerType(), True),
+            StructField('source_db', StringType(), True),
+            StructField('primary_keys', ArrayType(StringType()), True),
+            StructField('oracle_scn', LongType(), True),
+            StructField('postgres_lsn', StringType(), True),
+            StructField('last_processed_timestamp', TimestampType(), True),
+            StructField('error_message', StringType(), True)
+        ])
+
+    def _merge_status_update(self, status_data: list) -> None:
+        """
+        Merge status update into status table using MERGE INTO
+
+        Args:
+            status_data: List of status dictionaries to merge
+        """
+        df = self.spark.createDataFrame(status_data, schema=self._get_status_schema())
+        df.createOrReplaceTempView("status_updates")
+
+        self.spark.sql(f"""
+            MERGE INTO {self.status_table} target
+            USING status_updates source
+            ON target.table_name = source.table_name
+            WHEN MATCHED THEN UPDATE SET *
+            WHEN NOT MATCHED THEN INSERT *
+        """)
     
     def _create_status_table_if_not_exists(self):
         """Create the status tracking table if it doesn't exist"""
-        
+
         try:
             # Try to read the table to see if it exists
             self.spark.table(self.status_table)
             logger.info(f"Status table {self.status_table} already exists")
-        except:
+        except AnalysisException:
             # Table doesn't exist, create it
             logger.info(f"Creating status table {self.status_table}")
-            
-            schema = StructType([
-                StructField('table_name', StringType(), False),
-                StructField('load_status', StringType(), True),
-                StructField('initial_load_start', TimestampType(), True),
-                StructField('initial_load_end', TimestampType(), True),
-                StructField('record_count', IntegerType(), True),
-                StructField('source_db', StringType(), True),
-                StructField('primary_keys', ArrayType(StringType()), True),
-                StructField('oracle_scn', LongType(), True),  # Changed to LongType for large SCN values
-                StructField('postgres_lsn', StringType(), True),
-                StructField('last_processed_timestamp', TimestampType(), True),
-                StructField('error_message', StringType(), True)
-            ])
-            
+
             # Create empty DataFrame with schema
-            empty_df = self.spark.createDataFrame([], schema)
-            
+            empty_df = self.spark.createDataFrame([], self._get_status_schema())
+
             # Create Iceberg table
             empty_df.writeTo(self.status_table).using("iceberg").create()
-            
+
             logger.info(f"Created status table {self.status_table}")
     
     def record_initial_load_start(self, table_name: str, source_db: str, primary_keys: list = None, oracle_scn: int = None, postgres_lsn: str = None):
@@ -96,34 +123,7 @@ class CDCStatusTracker:
             'error_message': None
         }]
 
-        # Define explicit schema to avoid type inference issues
-        schema = StructType([
-            StructField('table_name', StringType(), False),
-            StructField('load_status', StringType(), True),
-            StructField('initial_load_start', TimestampType(), True),
-            StructField('initial_load_end', TimestampType(), True),
-            StructField('record_count', IntegerType(), True),
-            StructField('source_db', StringType(), True),
-            StructField('primary_keys', ArrayType(StringType()), True),
-            StructField('oracle_scn', LongType(), True),  # Changed to LongType for large SCN values
-            StructField('postgres_lsn', StringType(), True),
-            StructField('last_processed_timestamp', TimestampType(), True),
-            StructField('error_message', StringType(), True)
-        ])
-
-        df = self.spark.createDataFrame(status_data, schema=schema)
-
-        # Use merge instead of append
-        df.createOrReplaceTempView("status_updates")
-
-        self.spark.sql(f"""
-            MERGE INTO {self.status_table} target
-            USING status_updates source
-            ON target.table_name = source.table_name
-            WHEN MATCHED THEN UPDATE SET *
-            WHEN NOT MATCHED THEN INSERT *
-        """)
-
+        self._merge_status_update(status_data)
         logger.info(f"Recorded initial load start for {table_name} (SCN: {oracle_scn}, LSN: {postgres_lsn})")
 
 
@@ -147,7 +147,8 @@ class CDCStatusTracker:
                 initial_start = None
                 source_db = None
                 existing_pks = []
-        except:
+        except Exception as e:
+            logger.warning(f"Could not retrieve existing status for {table_name}: {e}")
             initial_start = None
             source_db = None
             existing_pks = []
@@ -169,34 +170,7 @@ class CDCStatusTracker:
             'error_message': None
         }]
 
-        # Define explicit schema to avoid type inference issues
-        schema = StructType([
-            StructField('table_name', StringType(), False),
-            StructField('load_status', StringType(), True),
-            StructField('initial_load_start', TimestampType(), True),
-            StructField('initial_load_end', TimestampType(), True),
-            StructField('record_count', IntegerType(), True),
-            StructField('source_db', StringType(), True),
-            StructField('primary_keys', ArrayType(StringType()), True),
-            StructField('oracle_scn', LongType(), True),  # Changed to LongType for large SCN values
-            StructField('postgres_lsn', StringType(), True),
-            StructField('last_processed_timestamp', TimestampType(), True),
-            StructField('error_message', StringType(), True)
-        ])
-
-        df = self.spark.createDataFrame(status_data, schema=schema)
-
-        # Use merge instead of append
-        df.createOrReplaceTempView("status_updates")
-
-        self.spark.sql(f"""
-            MERGE INTO {self.status_table} target
-            USING status_updates source
-            ON target.table_name = source.table_name
-            WHEN MATCHED THEN UPDATE SET *
-            WHEN NOT MATCHED THEN INSERT *
-        """)
-
+        self._merge_status_update(status_data)
         logger.info(f"Recorded initial load completion for {table_name}: {record_count} records")
 
 
@@ -218,7 +192,8 @@ class CDCStatusTracker:
             else:
                 initial_start = None
                 source_db = None
-        except:
+        except Exception as e:
+            logger.warning(f"Could not retrieve existing status for {table_name}: {e}")
             initial_start = None
             source_db = None
 
@@ -229,39 +204,14 @@ class CDCStatusTracker:
             'initial_load_end': datetime.now(),
             'record_count': None,
             'source_db': source_db,
+            'primary_keys': [],
             'oracle_scn': None,
             'postgres_lsn': None,
             'last_processed_timestamp': None,
             'error_message': error_message
         }]
 
-        # Define explicit schema to avoid type inference issues
-        schema = StructType([
-            StructField('table_name', StringType(), False),
-            StructField('load_status', StringType(), True),
-            StructField('initial_load_start', TimestampType(), True),
-            StructField('initial_load_end', TimestampType(), True),
-            StructField('record_count', IntegerType(), True),
-            StructField('source_db', StringType(), True),
-            StructField('oracle_scn', LongType(), True),  # Changed to LongType for large SCN values
-            StructField('postgres_lsn', StringType(), True),
-            StructField('last_processed_timestamp', TimestampType(), True),
-            StructField('error_message', StringType(), True)
-        ])
-
-        df = self.spark.createDataFrame(status_data, schema=schema)
-
-        # Use merge instead of append
-        df.createOrReplaceTempView("status_updates")
-
-        self.spark.sql(f"""
-            MERGE INTO {self.status_table} target
-            USING status_updates source
-            ON target.table_name = source.table_name
-            WHEN MATCHED THEN UPDATE SET *
-            WHEN NOT MATCHED THEN INSERT *
-        """)
-
+        self._merge_status_update(status_data)
         logger.error(f"Recorded initial load failure for {table_name}: {error_message}")
 
 
@@ -275,27 +225,14 @@ class CDCStatusTracker:
             'initial_load_end': None,
             'record_count': None,
             'source_db': None,
+            'primary_keys': [],
             'oracle_scn': oracle_scn,
             'postgres_lsn': postgres_lsn,
             'last_processed_timestamp': last_timestamp or datetime.now(),
             'error_message': None
         }]
 
-        # Define explicit schema to avoid type inference issues
-        schema = StructType([
-            StructField('table_name', StringType(), False),
-            StructField('load_status', StringType(), True),
-            StructField('initial_load_start', TimestampType(), True),
-            StructField('initial_load_end', TimestampType(), True),
-            StructField('record_count', IntegerType(), True),
-            StructField('source_db', StringType(), True),
-            StructField('oracle_scn', LongType(), True),  # Changed to LongType for large SCN values
-            StructField('postgres_lsn', StringType(), True),
-            StructField('last_processed_timestamp', TimestampType(), True),
-            StructField('error_message', StringType(), True)
-        ])
-
-        df = self.spark.createDataFrame(status_data, schema=schema)
+        df = self.spark.createDataFrame(status_data, schema=self._get_status_schema())
 
         # Use merge to update only CDC position fields
         df.createOrReplaceTempView("status_updates")

@@ -55,50 +55,65 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - Updated `README.md` with Databricks deployment options and features
   - AWS-focused configuration (S3, IAM roles, Unity Catalog)
 
-### Documentation
+### Primary Key Handling - Phase 3
+- [DONE] Implement automatic primary key discovery and dynamic handling
+  - Added `get_primary_key_columns()` to both Oracle and PostgreSQL extractors
+  - Extended status tracker schema with `primary_keys` column (ArrayType)
+  - Implemented `get_primary_keys_map()` in CDC consumer to load PK metadata at startup
+  - Replaced hardcoded ROW_ID logic with dynamic PK handling supporting composite keys
+  - Added `primary_keys` configuration section to `sources.yaml.template` for manual overrides
+  - Implemented config validation in `config_loader.py` for primary_keys section
+  - **Files**: `lib/extractors/oracle_extractor.py`, `lib/extractors/postgres_extractor.py`,
+    `lib/status_tracker.py`, `jobs/direct_bulk_load.py`, `jobs/cdc_kafka_to_iceberg.py`,
+    `config/sources.yaml.template`, `lib/config_loader.py`
+
+### Documentation - Phase 4
 - [DONE] Create `docs/ORACLE_LONG_LIMITATIONS.md` - Oracle LONG column handling documentation
 - [DONE] Update all documentation with Databricks deployment information
+- [DONE] Complete README rewrite with beginner-friendly local setup guide
+  - Removed all hard-coded paths (e.g., `/opt/pipeline`, `/opt/data`)
+  - Added comprehensive 9-step local development setup (Java, Python, venv, JDBC drivers, etc.)
+  - Added two clear deployment options: Local Development vs Databricks Production
+  - Added extensive troubleshooting section for common setup issues
+  - Updated to use relative paths and environment variables (`.env` file)
+  - Added security best practices and .gitignore configuration
+  - Made suitable for users unfamiliar with Python or Databricks
+
+### Error Handling - Phase 5
+- [DONE] Replace bare exception handlers with specific types
+  - Fixed `lib/status_tracker.py` - 3 locations (lines 57, 151, 223)
+  - Fixed `jobs/cdc_kafka_to_iceberg.py` - 1 location (line 298)
+  - Verified `jobs/direct_bulk_load.py` - already using proper exception handling
+  - Added `AnalysisException` import for Spark table operations
+  - Added logging to track when fallback behavior occurs
+
+### Configuration - Phase 6
+- [DONE] Remove hardcoded paths and add cloud storage support
+  - Added `LOG_DIR` environment variable support (optional, for local dev)
+  - Added `CHECKPOINT_PATH` environment variable (supports s3://, dbfs://, file://)
+  - Updated `jobs/cdc_kafka_to_iceberg.py` - configurable logging and checkpoints
+  - Updated `jobs/direct_bulk_load.py` - configurable logging and checkpoints
+  - Updated `clear_checkpoint_directory()` to handle cloud storage gracefully
+  - All configuration now supports Databricks deployment out-of-the-box
+
+### Code Quality - Phase 7
+- [DONE] Refactor status_tracker.py to eliminate duplication
+  - Extracted `_get_status_schema()` static method (eliminates 5x duplication)
+  - Extracted `_merge_status_update()` method (eliminates 3x duplication)
+  - Refactored all status update methods to use helper methods
+  - Reduced from 355 lines to 288 lines (19% reduction, 67 lines eliminated)
+  - Improved maintainability - schema changes now require single location update
+  - **File**: `lib/status_tracker.py`
 
 ---
 
 ## Short Term (Next Sprint)
-
-### Primary Key Handling
-- [TODO] Add explicit primary key configuration per table in sources.yaml
-  - Remove ROW_ID assumption in CDC consumer
-  - Support composite primary keys
-  - Validate PK exists before processing CDC events
-  - **File**: `jobs/cdc_kafka_to_iceberg.py:213,227`
 
 ### Idempotency
 - [TODO] Implement idempotency checks for bulk load
   - Add checksum/hash column to track data versions
   - Prevent duplicate loads of same data
   - **File**: `jobs/direct_bulk_load.py`
-
-### Configuration
-- [TODO] Remove hardcoded local paths, use Databricks-compatible locations
-  - Replace `/opt/pipeline/lib` with workspace paths or Python package imports
-  - Warehouse path from WAREHOUSE_PATH environment variable (S3 or DBFS)
-  - Logs written to Databricks driver logs (automatically captured)
-  - Checkpoints to DBFS or S3 (configured via environment variable)
-  - Ensure all paths support cloud storage (s3://, dbfs://)
-  - **Files**: Multiple
-
-### Error Handling
-- [TODO] Replace bare exception handlers with specific types
-  - **File**: `lib/status_tracker.py:55,145,212`
-  - **File**: `jobs/cdc_kafka_to_iceberg.py:151`
-  - **File**: `jobs/direct_bulk_load.py:176`
-
-### Code Quality
-- [DONE] Refactor duplicate code across job scripts into utility modules
-  - Created SparkSessionFactory, DatabaseConnectionBuilder, IcebergTableManager
-  - Eliminated ~162 lines of duplication
-- [TODO] Refactor status_tracker.py to eliminate schema duplication
-  - Extract schema definition to single method
-  - Extract MERGE logic to single method
-  - Reduce 350+ lines to ~200 lines
 
 ### Monitoring
 - [TODO] Add metrics/monitoring hooks for Databricks
@@ -242,15 +257,13 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 2. **No Distributed Locking**: Parallel Databricks jobs on same source could conflict
 3. **Limited Retry Logic**: Simple exponential backoff, no circuit breaker
 4. **Kafka Offset Management**: Checkpoint deletion (DBFS/S3) causes full replay
-5. **Primary Key Discovery**: Relies on ROW_ID convention or guessing
-6. **Schema Changes**: No automatic handling of DDL changes
-7. **Large Transactions**: No batching for very large CDC transactions
-8. **Cross-Region**: No multi-region Unity Catalog support in design
+5. **Schema Changes**: No automatic handling of DDL changes (see Schema Change Tracking in Long Term)
+6. **Large Transactions**: No batching for very large CDC transactions
+7. **Cross-Region**: No multi-region Unity Catalog support in design
 
 ### Workarounds (Databricks Context)
 - Use Databricks job concurrency limits (max concurrent runs = 1 per source)
 - Store checkpoints in S3 with versioning enabled
-- Define primary keys explicitly in sources.yaml (future enhancement)
 - Use Unity Catalog's schema evolution features where possible
 - Monitor for schema changes using AWS Glue or Unity Catalog audit logs
 - Split large tables using table-filter parameter in separate jobs
@@ -261,7 +274,7 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 
 1. **Secrets Management**: [RESOLVED] Databricks Secrets implemented with AWS parameter store integration.
 2. **Monitoring**: CloudWatch for metrics/alarms + Databricks job monitoring sufficient, or need additional tooling?
-3. **Primary Keys**: Can we enforce a convention or need flexible per-table configuration in sources.yaml?
+3. **Primary Keys**: [RESOLVED] Automatic discovery from database metadata with optional manual override in sources.yaml. Supports composite keys.
 4. **Schema Registry**: Unity Catalog native features sufficient, or need separate schema versioning system?
 5. **Exactly-Once**: Is at-least-once acceptable or do we need exactly-once guarantees for CDC?
 6. **Idempotency**: Should bulk loads be idempotent (checksum-based) or accept manual re-runs?
