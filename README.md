@@ -11,6 +11,10 @@ An ETL pipeline for extracting data from Oracle and PostgreSQL databases and loa
 - **Schema Handling**: Automatic Oracle NUMBER type fixes, LONG column handling
 - **CDC Integration**: Debezium-based change capture via Kafka
 - **Status Tracking**: Built-in progress tracking in Iceberg
+- **Schema Change Tracking**: Automatic detection and audit trail of schema changes
+- **Monitoring & Observability**: CloudWatch metrics, structured logging, performance tracking
+- **Data Quality Validation**: Row count checks, null constraints, type validation, checksums
+- **Idempotency**: Hash-based duplicate detection prevents reprocessing
 - **Databricks Ready**: Seamless deployment to Databricks with Unity Catalog support
 - **Cloud Storage**: AWS S3 and MinIO (S3-compatible for local testing) support
 - **Security**: Environment variables + Databricks Secrets management
