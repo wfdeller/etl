@@ -35,10 +35,14 @@ def _substitute_env_vars(config: Any) -> Any:
     else:
         return config
 
+def load_config_raw(config_file: str) -> Dict[str, Any]:
+    """Load YAML configuration file without environment variable substitution"""
+    with open(config_file, 'r') as f:
+        return yaml.safe_load(f)
+
 def load_config(config_file: str) -> Dict[str, Any]:
     """Load YAML configuration file with environment variable substitution"""
-    with open(config_file, 'r') as f:
-        config = yaml.safe_load(f)
+    config = load_config_raw(config_file)
     return _substitute_env_vars(config)
 
 def _validate_primary_keys(source_name: str, source_config: Dict[str, Any]) -> None:
@@ -195,16 +199,23 @@ def _validate_data_quality_config(source_name: str, source_config: Dict[str, Any
 
 
 def get_source_config(source_name: str) -> Dict[str, Any]:
-    """Get configuration for a specific source"""
+    """Get configuration for a specific source
+
+    Only validates environment variables for the requested source,
+    not all sources in the config file.
+    """
     config_dir = os.environ.get('CONFIG_DIR')
     if not config_dir:
         raise ValueError("CONFIG_DIR environment variable must be set")
 
-    config = load_config(f'{config_dir}/sources.yaml')
+    # Load raw config without env var substitution
+    config = load_config_raw(f'{config_dir}/sources.yaml')
     if source_name not in config['sources']:
         raise ValueError(f"Source '{source_name}' not found in configuration")
 
+    # Extract only the requested source and substitute env vars for it
     source_config = config['sources'][source_name]
+    source_config = _substitute_env_vars(source_config)
 
     # Validate configuration sections
     _validate_primary_keys(source_name, source_config)

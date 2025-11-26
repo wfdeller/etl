@@ -136,17 +136,37 @@ def process_single_table(table_name: str, extractor, tracker, schema_tracker, ic
     # Idempotency check: skip if this load already completed
     # Check if there's a completed load with the same SCN/LSN
     try:
-        from pyspark.sql.functions import col
-        existing_load = tracker.spark.table(tracker.status_table) \
-            .filter(
-                (col("table_name") == table_name) &
-                (col("load_status") == "completed") &
-                (
-                    ((col("oracle_scn") == scn_lsn['oracle_scn']) & (scn_lsn['oracle_scn'] is not None)) |
-                    ((col("postgres_lsn") == scn_lsn['postgres_lsn']) & (scn_lsn['postgres_lsn'] is not None))
-                )
-            ) \
-            .first()
+        from pyspark.sql.functions import col, lit
+
+        # Build filter conditions based on which SCN/LSN values are present
+        scn_filter = None
+        lsn_filter = None
+
+        if scn_lsn.get('oracle_scn') is not None:
+            scn_filter = (col("oracle_scn") == lit(scn_lsn['oracle_scn']))
+
+        if scn_lsn.get('postgres_lsn') is not None:
+            lsn_filter = (col("postgres_lsn") == lit(scn_lsn['postgres_lsn']))
+
+        # Combine filters
+        base_filter = (col("table_name") == lit(table_name)) & (col("load_status") == lit("completed"))
+
+        if scn_filter is not None and lsn_filter is not None:
+            scn_lsn_filter = scn_filter | lsn_filter
+        elif scn_filter is not None:
+            scn_lsn_filter = scn_filter
+        elif lsn_filter is not None:
+            scn_lsn_filter = lsn_filter
+        else:
+            # No SCN/LSN to check, skip idempotency check
+            scn_lsn_filter = None
+
+        if scn_lsn_filter is not None:
+            existing_load = tracker.spark.table(tracker.status_table) \
+                .filter(base_filter & scn_lsn_filter) \
+                .first()
+        else:
+            existing_load = None
 
         if existing_load:
             logger.info(f"{table_name}: SKIP: {table_name} already loaded at SCN/LSN "
