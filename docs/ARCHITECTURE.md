@@ -100,6 +100,14 @@ etl/
 ├── lib/                      # Reusable library modules
 │   ├── config_loader.py      # YAML config with env var substitution
 │   ├── status_tracker.py     # CDC status tracking in Iceberg
+│   ├── correlation.py        # Distributed tracing correlation IDs
+│   ├── monitoring.py         # Metrics collection and structured logging
+│   ├── data_quality.py       # Data quality validation framework
+│   ├── schema_tracker.py     # Schema change tracking and notification
+│   ├── spark_utils.py        # Spark session factory with JMX metrics
+│   ├── secrets_utils.py      # Secrets management (env vars, Databricks)
+│   ├── jdbc_utils.py         # JDBC connection builder
+│   ├── iceberg_utils.py      # Iceberg table manager
 │   │
 │   ├── extractors/           # Database extraction
 │   │   ├── base_extractor.py
@@ -113,7 +121,8 @@ etl/
 ├── jobs/                     # Main entry points
 │   ├── direct_bulk_load.py
 │   ├── cdc_kafka_to_iceberg.py
-│   └── validate_iceberg_tables.py
+│   ├── validate_iceberg_tables.py
+│   └── query_schema_changes.py
 │
 ├── checkpoints/              # Spark streaming checkpoints
 ├── logs/                     # Application logs
@@ -412,30 +421,48 @@ spark.network.timeout: 600s
 - WARNING: Retries, skipped tables
 - ERROR: Failures, exceptions
 
-### Metrics (Future)
+### Metrics (Implemented)
 
-**Key Metrics to Track**:
+**Current Implementation**:
+- MetricsCollector class in lib/monitoring.py
+- CloudWatch metrics integration (optional)
+- Structured JSON logging for downstream analysis
+- Spark JMX metrics for Dynatrace OneAgent
+- CDC lag tracking with Debezium timestamps
+- Throughput metrics (records/sec)
+- Batch processing time tracking
+
+**Key Metrics Tracked**:
 - Tables processed per hour
 - Records loaded per second
-- Failed table count
-- CDC lag (Kafka consumer lag)
-- SCN/LSN progression rate
+- CDC lag (seconds between event timestamp and processing)
+- CDC throughput (records/sec)
+- Batch processing time
+- Events processed/skipped counts
 - Table processing duration
 
 **Monitoring Integrations**:
-- Prometheus metrics endpoint
-- CloudWatch logs/metrics
-- Datadog APM
+- CloudWatch logs/metrics (boto3)
+- Dynatrace OneAgent (JMX + structured logs)
+- Structured JSON logging for any log aggregator
 
-### Alerting (Future)
+### Alerting (Configured)
 
-**Alert Conditions**:
-- Bulk load job failure
-- CDC consumer stopped
+**Available via Monitoring Integration**:
+- Structured event logging for alert triggers
+- CloudWatch alarms (when CloudWatch enabled)
+- Dynatrace alerting (when OneAgent deployed)
+- Custom alert webhooks via log analysis
+
+**Recommended Alert Conditions**:
+- Bulk load job failure (log level: ERROR)
+- CDC consumer stopped (no events processed)
+- CDC lag > threshold (cdc_lag_seconds metric)
 - Kafka consumer lag > threshold
-- Failed table count > 0
-- Disk space low
-- SCN/LSN not progressing
+- Failed table count > 0 (check _cdc_status table)
+- SCN/LSN not progressing (stale position tracking)
+
+See [Monitoring Integration Guide](MONITORING_INTEGRATION_GUIDE.md) for detailed alerting setup.
 
 ## Operational Procedures
 

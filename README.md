@@ -9,10 +9,12 @@ An ETL pipeline for extracting data from Oracle and PostgreSQL databases and loa
 - **Parallel Processing**: Configurable table-level and partition-level parallelism
 - **Fault Tolerance**: Checkpoint/resume capability with automatic retry logic
 - **Schema Handling**: Automatic Oracle NUMBER type fixes, LONG column handling
-- **CDC Integration**: Debezium-based change capture via Kafka
+- **CDC Integration**: Debezium-based change capture via Kafka with lag tracking
 - **Status Tracking**: Built-in progress tracking in Iceberg
 - **Schema Change Tracking**: Automatic detection and audit trail of schema changes
-- **Monitoring & Observability**: CloudWatch metrics, structured logging, performance tracking
+- **Monitoring & Observability**: CloudWatch metrics, structured logging, performance tracking, Dynatrace integration
+- **Distributed Tracing**: Correlation IDs for end-to-end request tracking across pipeline stages
+- **Enhanced Monitoring**: CDC lag metrics, throughput tracking, Spark JMX metrics for Dynatrace OneAgent
 - **Data Quality Validation**: Row count checks, null constraints, type validation, checksums
 - **Idempotency**: Hash-based duplicate detection prevents reprocessing
 - **Databricks Ready**: Seamless deployment to Databricks with Unity Catalog support
@@ -913,6 +915,10 @@ etl/
 │   ├── spark_utils.py             # Spark session factory
 │   ├── jdbc_utils.py              # JDBC connection builder
 │   ├── iceberg_utils.py           # Iceberg table manager
+│   ├── correlation.py             # Correlation ID management for distributed tracing
+│   ├── monitoring.py              # Metrics collection and structured logging
+│   ├── data_quality.py            # Data quality validation framework
+│   ├── schema_tracker.py          # Schema change tracking and notification
 │   ├── extractors/                # Database-specific extractors
 │   │   ├── base_extractor.py
 │   │   ├── oracle_extractor.py
@@ -924,10 +930,11 @@ etl/
 │   ├── direct_bulk_load.py        # Phase 1: Bulk load
 │   ├── cdc_kafka_to_iceberg.py    # Phase 2: CDC consumer
 │   ├── validate_iceberg_tables.py # Validation utility
-│   └── drop_test_tables.py        # Cleanup utility
+│   └── query_schema_changes.py    # Schema change query tool
 ├── jars/                          # JDBC drivers
+│   ├── iceberg-spark-runtime.jar  # Apache Iceberg Spark runtime
 │   ├── ojdbc8.jar                 # Oracle JDBC driver
-│   └── postgresql-42.7.1.jar      # PostgreSQL JDBC driver
+│   └── postgresql.jar             # PostgreSQL JDBC driver
 ├── venv/                          # Python virtual environment (local only)
 ├── warehouse/                     # Iceberg table storage (local only)
 ├── checkpoints/                   # Spark streaming checkpoints
@@ -998,7 +1005,9 @@ GRANT SELECT ON pg_catalog.pg_replication_slots TO etl_user;  -- For CDC
 
 - [Databricks Deployment Guide](docs/DATABRICKS_DEPLOYMENT.md) - Production deployment to Databricks
 - [Architecture Documentation](docs/ARCHITECTURE.md) - Detailed system architecture
+- [Monitoring Integration Guide](docs/MONITORING_INTEGRATION_GUIDE.md) - CloudWatch, Dynatrace, and observability setup
 - [Oracle LONG Limitations](docs/ORACLE_LONG_LIMITATIONS.md) - Oracle LONG column handling
+- [Schema Change Tracking](docs/SCHEMA_CHANGE_TRACKING.md) - Schema evolution monitoring
 
 ## External Resources
 

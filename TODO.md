@@ -15,7 +15,7 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 - AWS S3 for data lake storage
 - Databricks Secrets for credential management
 - Databricks Jobs/Workflows for orchestration
-- CloudWatch for monitoring and alerting
+- CloudWatch or Dynatrace for monitoring and alerting
 
 ---
 
@@ -139,10 +139,13 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 
 ### Monitoring & Data Quality - Phase 11
 - [DONE] Create monitoring and data quality infrastructure libraries
-  - Created `lib/monitoring.py` - CloudWatch metrics, structured logging, performance tracking (380 lines)
+  - Created `lib/monitoring.py` - CloudWatch metrics, structured logging, performance tracking (428 lines)
     - MetricsCollector: CloudWatch integration with fallback to structured logging
-    - StructuredLogger: JSON event logging for downstream analysis
+    - StructuredLogger: JSON event logging with correlation IDs for distributed tracing
     - PerformanceTracker: Operation profiling with memory tracking
+    - Enhanced log_event() with correlation_id, environment, and severity fields
+    - Added emit_gauge() method for point-in-time metrics (CDC lag, throughput)
+    - Import fallback for correlation module (graceful degradation)
   - Created `lib/data_quality.py` - Comprehensive DQ validation (420 lines)
     - Row count validation with configurable tolerance
     - Null constraint validation for required columns
@@ -159,7 +162,7 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
     - Performance impact analysis and troubleshooting
     - Rollback instructions if needed
   - Added monitoring imports to `jobs/direct_bulk_load.py`
-  - **Status**: Libraries complete, integration guide documented, ready for deployment
+  - **Status**: Libraries complete, integration guide documented, CDC integration complete
   - **Files**: `lib/monitoring.py`, `lib/data_quality.py`, `lib/config_loader.py`,
     `docs/MONITORING_INTEGRATION_GUIDE.md`
 
@@ -184,18 +187,85 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - Eliminates "Could not retrieve existing status: get" warnings during bulk loads
   - **Files**: `lib/status_tracker.py:232`
 
+### Distributed Tracing - Phase 15
+- [DONE] Implement correlation ID system for end-to-end request tracking
+  - Created `lib/correlation.py` - Correlation ID management module (125 lines)
+    - UUID-based correlation ID generation (generate_correlation_id)
+    - Thread-safe ContextVar storage for correlation IDs
+    - get_correlation_id() - Retrieve or auto-generate correlation ID
+    - set_correlation_id() - Set correlation ID from upstream systems
+    - clear_correlation_id() - Reset correlation ID between batches
+    - with_correlation_id() - Context manager for scoped correlation IDs
+  - Integrated correlation IDs into monitoring infrastructure
+    - lib/monitoring.py imports correlation functions with fallback
+    - StructuredLogger.log_event() automatically includes correlation_id field
+    - All log events tagged with correlation ID for distributed tracing
+  - Integrated into CDC consumer workflow
+    - jobs/cdc_kafka_to_iceberg.py generates correlation ID per batch
+    - Enables end-to-end tracing across Kafka -> Spark -> Iceberg pipeline
+    - Correlation IDs logged in all structured events for troubleshooting
+  - **Use Cases**: Trace requests across services, correlate logs in Dynatrace/CloudWatch
+  - **Files**: `lib/correlation.py`, `lib/monitoring.py`, `jobs/cdc_kafka_to_iceberg.py`
+
+### Dynatrace Observability - Phase 16
+- [DONE] Implement Dynatrace monitoring integration for Databricks deployment
+  - Enhanced `lib/spark_utils.py` with JMX metrics configuration (242 lines total)
+    - Added _add_performance_config() with Spark JMX sink configuration
+    - spark.metrics.conf.*.sink.jmx.class = JmxSink for Dynatrace OneAgent
+    - spark.metrics.namespace configuration for application identification
+    - Enables automatic metrics discovery by Dynatrace OneAgent
+  - Implemented CDC lag and throughput tracking
+    - jobs/cdc_kafka_to_iceberg.py calculates CDC lag from Debezium ts_ms timestamps
+    - Tracks time delta between event creation and processing (cdc_lag_seconds)
+    - Calculates throughput metrics (cdc_throughput_records_per_sec)
+    - Emits gauge metrics for real-time monitoring dashboards
+  - Enhanced monitoring documentation with Dynatrace integration (795 lines total)
+    - docs/MONITORING_INTEGRATION_GUIDE.md - Added comprehensive Dynatrace section
+    - OneAgent deployment guide (init scripts for Databricks clusters)
+    - Cluster configuration and secrets management
+    - Dashboard recommendations (CDC lag, throughput, batch processing time)
+    - Alerting recommendations with threshold guidance
+    - Troubleshooting scenarios and resolution steps
+  - **Key Metrics**: cdc_lag_seconds, cdc_throughput_records_per_sec, cdc_batch_processing_time
+  - **Files**: `lib/spark_utils.py`, `jobs/cdc_kafka_to_iceberg.py`, `docs/MONITORING_INTEGRATION_GUIDE.md`
+
 ---
 
 ## Short Term (Next Sprint)
 
 ### Monitoring
 - [DONE] Monitoring infrastructure libraries created (See Phase 11 above)
-- [TODO] Complete integration into job files
+- [DONE] CDC consumer monitoring integration complete (See Phase 16 above)
+  - MetricsCollector and StructuredLogger integrated into jobs/cdc_kafka_to_iceberg.py
+  - CDC lag tracking with Debezium timestamps
+  - Throughput metrics (records/sec)
+  - Correlation IDs for distributed tracing
+  - 5 metrics emitted: cdc_lag_seconds, cdc_throughput_records_per_sec, cdc_batch_processing_time, cdc_events_processed, cdc_events_skipped
+- [TODO] Complete bulk load monitoring integration
+  - Integrate MetricsCollector into jobs/direct_bulk_load.py
+  - Add table-level metrics (load duration, record count, retry count)
+  - Add job-level metrics (total tables, total records, total duration)
   - Follow `docs/MONITORING_INTEGRATION_GUIDE.md` for step-by-step instructions
+- [TODO] Deploy and validate monitoring
   - Test in development environment
-  - Deploy to Databricks staging with CloudWatch enabled
-  - Set up CloudWatch alarms for failure metrics
-  - Create Databricks SQL Analytics dashboards
+  - Deploy to Databricks staging with CloudWatch or Dynatrace enabled
+  - Set up CloudWatch alarms or Dynatrace alerts for failure metrics
+  - Create Databricks SQL Analytics dashboards or Dynatrace dashboards
+
+### Data Quality
+- [DONE] Data quality validation library created (See Phase 11 above)
+  - Created lib/data_quality.py with comprehensive validation framework
+  - Row count validation with configurable tolerance
+  - Null constraint validation for required columns
+  - Data type validation (schema compatibility)
+  - Table checksum comparison (MD5-based integrity)
+  - Column statistics validation for numeric columns
+- [TODO] Integrate data quality checks into job workflows
+  - Add validation to jobs/direct_bulk_load.py after table extraction
+  - Add validation to jobs/cdc_kafka_to_iceberg.py for critical tables
+  - Configure validation rules in config/sources.yaml per source
+  - Emit data quality metrics to CloudWatch/Dynatrace
+  - Alert on validation failures (row count mismatches, checksum failures)
 
 ---
 
@@ -230,13 +300,6 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - Use actual memory usage instead of row count for persistence decisions
   - Monitor Spark executor memory
   - Dynamic threshold adjustment
-
-### Data Quality
-- [TODO] Add data quality checks
-  - Row count validation (source vs destination)
-  - Checksum comparison for critical tables
-  - Data type validation
-  - Null value checks for required columns
 
 ### Testing
 - [TODO] Add integration tests (Databricks-compatible)
@@ -280,6 +343,7 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 - [DONE] README with setup instructions
 - [DONE] TODO tracking (this file)
 - [DONE] Databricks deployment guide (docs/DATABRICKS_DEPLOYMENT.md)
+- [DONE] Monitoring integration guide (docs/MONITORING_INTEGRATION_GUIDE.md)
 - [DONE] Oracle LONG limitations documentation (docs/ORACLE_LONG_LIMITATIONS.md)
 - [DONE] Schema change tracking documentation (docs/SCHEMA_CHANGE_TRACKING.md)
 - [DONE] Configuration templates with examples (config/*.template)
@@ -338,7 +402,7 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 ## Questions for Product/Architecture Review (Databricks-Focused)
 
 1. **Secrets Management**: [RESOLVED] Databricks Secrets implemented with AWS parameter store integration.
-2. **Monitoring**: CloudWatch for metrics/alarms + Databricks job monitoring sufficient, or need additional tooling?
+2. **Monitoring**: [RESOLVED] CloudWatch and Dynatrace integration implemented. CDC lag tracking, throughput metrics, correlation IDs, and JMX metrics for Dynatrace OneAgent. Bulk load monitoring integration pending.
 3. **Primary Keys**: [RESOLVED] Automatic discovery from database metadata with optional manual override in sources.yaml. Supports composite keys.
 4. **Schema Registry**: Unity Catalog native features sufficient, or need separate schema versioning system?
 5. **Exactly-Once**: Is at-least-once acceptable or do we need exactly-once guarantees for CDC?
@@ -382,6 +446,8 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
 ### Internal Documentation
 - [Databricks Deployment Guide](docs/DATABRICKS_DEPLOYMENT.md)
 - [Architecture Documentation](docs/ARCHITECTURE.md)
+- [Monitoring Integration Guide](docs/MONITORING_INTEGRATION_GUIDE.md)
+- [Schema Change Tracking](docs/SCHEMA_CHANGE_TRACKING.md)
 - [Oracle LONG Limitations](docs/ORACLE_LONG_LIMITATIONS.md)
 
 ### External Documentation

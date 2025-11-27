@@ -349,6 +349,17 @@ For the CDC Kafka consumer, use an always-on cluster:
 
 ## Monitoring and Troubleshooting
 
+### Enhanced Monitoring
+
+The ETL pipeline includes comprehensive observability features. For detailed setup instructions, see the **[Monitoring Integration Guide](MONITORING_INTEGRATION_GUIDE.md)** which covers:
+
+- CloudWatch metrics integration
+- Dynatrace OneAgent deployment on Databricks
+- Structured logging for log aggregation
+- CDC lag and throughput tracking
+- Correlation IDs for distributed tracing
+- Custom dashboards and alerting
+
 ### Job Monitoring
 
 1. **Databricks UI**:
@@ -362,11 +373,18 @@ For the CDC Kafka consumer, use an always-on cluster:
     - Driver logs: `/databricks/driver/logs/`
     - Application logs: Check job run output
     - Custom logs: Use `logging` module (written to driver logs)
+    - Structured JSON logs: Search for `EVENT:` and `METRIC:` prefixes
 
 3. **Spark UI**:
     - Access from job run details
     - Monitor stage execution
     - Identify bottlenecks
+
+4. **Metrics Collection**:
+    - Built-in metrics via `lib/monitoring.py`
+    - CloudWatch integration (optional, requires boto3)
+    - Spark JMX metrics for Dynatrace OneAgent
+    - CDC lag tracking: `cdc_lag_seconds` metric
 
 ### Common Issues
 
@@ -542,7 +560,7 @@ export ORACLE_DEV_PASSWORD=your_password
 ### 5. Run ETL Job
 
 ```bash
-python jobs/direct_bulk_load.py --source local_mydb_minio --table-filter "SMALL_TABLE"
+python jobs/direct_bulk_load.py --source local_minio --table-filter "SMALL_TABLE"
 ```
 
 ### 6. Verify Data in MinIO
@@ -574,6 +592,14 @@ Once validated, the same code will work on Databricks with real S3/ADLS.
 7. Monitor initial runs and optimize based on metrics
 
 ## Additional Resources
+
+### Internal Documentation
+
+-   [Monitoring Integration Guide](MONITORING_INTEGRATION_GUIDE.md) - CloudWatch, Dynatrace, and observability
+-   [Architecture Documentation](ARCHITECTURE.md) - Detailed system architecture
+-   [Schema Change Tracking](SCHEMA_CHANGE_TRACKING.md) - Schema evolution monitoring
+
+### External Resources
 
 -   [Databricks Unity Catalog Documentation](https://docs.databricks.com/en/data-governance/unity-catalog/index.html)
 -   [Apache Iceberg on Databricks](https://docs.databricks.com/en/delta/uniform.html)
