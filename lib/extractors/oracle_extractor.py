@@ -101,11 +101,11 @@ class OracleTableExtractor(BaseTableExtractor):
                 return pk_cols
             else:
                 # Fallback to ROW_ID if no explicit primary key
-                logger.info(f"{table_name}: no primary key found, will use ROWID")
-                return ['ROWID']
+                logger.info(f"{table_name}: no primary key found, will use ROW_ID")
+                return ['ROW_ID']
         except Exception as e:
-            logger.warning(f"{table_name}: could not determine primary key: {e}, using ROWID")
-            return ['ROWID']
+            logger.warning(f"{table_name}: could not determine primary key: {e}, using ROW_ID")
+            return ['ROW_ID']
 
     def build_query(self, table_name, scn=None, exclude_long_columns=None):
         """Build optimized Oracle query with SCN flashback"""

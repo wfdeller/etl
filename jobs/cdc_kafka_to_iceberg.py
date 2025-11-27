@@ -11,6 +11,7 @@ import argparse
 import logging
 import json
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -22,7 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT / 'lib'))
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, expr
-from pyspark.sql.types import StructType, StructField, StringType, LongType, TimestampType
+from pyspark.sql.types import StructType, StructField, StringType, LongType, TimestampType, DecimalType
 
 from config_loader import get_source_config, get_kafka_config
 from status_tracker import CDCStatusTracker
@@ -55,6 +56,55 @@ CDC_POSITION_UPDATE_INTERVAL = int(os.environ.get('CDC_POSITION_UPDATE_INTERVAL'
 
 
 # Spark session creation moved to SparkSessionFactory.create()
+
+
+def convert_timestamps_for_schema(data: Dict, schema: StructType) -> Dict:
+    """
+    Convert types for schema compatibility.
+
+    Debezium sends:
+    - Timestamps as integers (millis since epoch), but Spark TimestampType requires datetime objects
+    - Numeric values as integers/floats, but Spark DecimalType requires Decimal objects
+
+    Args:
+        data: Dictionary containing CDC event data
+        schema: Spark StructType schema with expected column types
+
+    Returns:
+        New dictionary with types converted to match schema
+    """
+    if not data or not schema:
+        return data
+
+    # Create a copy to avoid modifying original
+    converted_data = data.copy()
+
+    # Convert types based on schema
+    for field in schema.fields:
+        field_name = field.name
+        if field_name not in converted_data:
+            continue
+
+        value = converted_data[field_name]
+        if value is None:
+            continue
+
+        # Convert TimestampType
+        if isinstance(field.dataType, TimestampType) and isinstance(value, int):
+            try:
+                # Convert milliseconds to seconds and create datetime
+                converted_data[field_name] = datetime.fromtimestamp(value / 1000.0)
+            except (ValueError, OSError) as e:
+                logger.warning(f"Could not convert timestamp for {field_name}: {value} - {e}")
+
+        # Convert DecimalType
+        elif isinstance(field.dataType, DecimalType) and isinstance(value, (int, float)):
+            try:
+                converted_data[field_name] = Decimal(str(value))
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Could not convert decimal for {field_name}: {value} - {e}")
+
+    return converted_data
 
 
 def get_starting_position(spark: SparkSession, tracker: CDCStatusTracker, db_type: str) -> Dict[str, Optional[int]]:
@@ -153,7 +203,8 @@ def get_primary_keys_map(tracker: CDCStatusTracker) -> Dict[str, list]:
         pk_map = {}
         for row in completed_df.collect():
             table_name = row['table_name']
-            primary_keys = row.get('primary_keys', [])
+            # Row objects don't have .get() method, check if field exists
+            primary_keys = row['primary_keys'] if 'primary_keys' in row.asDict() else []
 
             # Only store if we have valid primary keys
             if primary_keys and len(primary_keys) > 0:
@@ -206,11 +257,27 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
         logger.error(f"Could not ensure table {table_name} exists, skipping event")
         return
 
+    # Try to get existing table schema (more robust than inference)
+    try:
+        table_schema = spark.table(iceberg_table).schema
+        logger.debug(f"{table_name}: using existing table schema with {len(table_schema.fields)} columns")
+    except Exception:
+        # Table doesn't exist or can't be read, will use schema inference
+        table_schema = None
+        logger.debug(f"{table_name}: will use schema inference")
+
     # Detect schema changes before applying CDC event
     if schema_tracker and source_db:
         try:
             # Get current schema from the event data
-            current_df = spark.createDataFrame([sample_data])
+            if table_schema:
+                # Convert timestamps for schema compatibility
+                converted_sample = convert_timestamps_for_schema(sample_data, table_schema)
+                # Use existing schema to create DataFrame
+                current_df = spark.createDataFrame([converted_sample], schema=table_schema)
+            else:
+                # Fallback to inference
+                current_df = spark.createDataFrame([sample_data])
             changes = schema_tracker.detect_and_record_changes(table_name, current_df.schema, source_db)
 
             if changes:
@@ -242,14 +309,18 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
         if operation in ('c', 'r'):
             # Insert
             if after:
-                df = spark.createDataFrame([after])
+                # Convert timestamps if using explicit schema
+                after_data = convert_timestamps_for_schema(after, table_schema) if table_schema else after
+                df = spark.createDataFrame([after_data], schema=table_schema) if table_schema else spark.createDataFrame([after_data])
                 df.writeTo(iceberg_table).option("mergeSchema", "true").append()
                 logger.debug(f"INSERT into {table_name}")
 
         elif operation == 'u':
             # Update - use MERGE with dynamic PK handling (supports composite keys)
             if after and before and pk_cols:
-                df = spark.createDataFrame([after])
+                # Convert timestamps if using explicit schema
+                after_data = convert_timestamps_for_schema(after, table_schema) if table_schema else after
+                df = spark.createDataFrame([after_data], schema=table_schema) if table_schema else spark.createDataFrame([after_data])
                 df.createOrReplaceTempView("cdc_update")
 
                 # Build ON clause for composite keys: "target.pk1 = source.pk1 AND target.pk2 = source.pk2"
@@ -270,8 +341,10 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
         elif operation == 'd':
             # Delete - supports composite keys
             if before and pk_cols:
+                # Convert timestamps if using explicit schema
+                before_data = convert_timestamps_for_schema(before, table_schema) if table_schema else before
                 # Create temp view for delete matching
-                delete_df = spark.createDataFrame([before])
+                delete_df = spark.createDataFrame([before_data], schema=table_schema) if table_schema else spark.createDataFrame([before_data])
                 delete_df.createOrReplaceTempView("cdc_delete")
 
                 # Build WHERE clause for composite keys
@@ -411,6 +484,9 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
                 # Extract source SCN/LSN
                 source_info = payload.get('source', {})
                 event_scn = source_info.get('scn') or source_info.get('lsn')
+                # Convert to int if it's a string (Debezium may send large numbers as strings)
+                if event_scn and isinstance(event_scn, str):
+                    event_scn = int(event_scn)
 
                 # Check if this is a known table
                 is_new_table = table_name not in get_known_tables_cache()
@@ -442,7 +518,9 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
                         tracker.update_cdc_position(table_name, postgres_lsn=str(event_scn))
 
             except Exception as e:
-                logger.error(f"Error processing message from {msg.get('topic')}: {e}")
+                # Row objects don't have .get() method, use dict access
+                topic = msg['topic'] if 'topic' in msg.asDict() else 'unknown'
+                logger.error(f"Error processing message from {topic}: {e}")
                 continue
 
         logger.info(f"Batch {batch_id}: processed {events_processed}, skipped {events_skipped}, new tables {new_tables_created}")
@@ -561,7 +639,7 @@ def main():
     try:
         run_cdc_consumer(args.source, args.batch_size)
     except Exception as e:
-        logger.error(f"CDC Consumer failed: {e}", file=sys.stderr)
+        logger.error(f"CDC Consumer failed: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
