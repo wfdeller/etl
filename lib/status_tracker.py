@@ -38,7 +38,7 @@ class CDCStatusTracker:
 
         Args:
             spark: SparkSession
-            namespace: Iceberg namespace (e.g., 'bronze.siebel')
+            namespace: Iceberg namespace (e.g., 'bronze.dev_source')
             catalog: Iceberg catalog name (default: 'local')
         """
         self.spark = spark

@@ -29,7 +29,7 @@ class MetricsCollector:
 
         Args:
             job_name: Name of the job (e.g., 'bulk_load', 'cdc_consumer')
-            source_name: Source identifier (e.g., 'dev_siebel')
+            source_name: Source identifier (e.g., 'dev_source')
             enable_cloudwatch: Attempt to use CloudWatch if available
         """
         self.job_name = job_name

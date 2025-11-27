@@ -39,11 +39,11 @@ class IcebergTableManager:
         Build fully qualified Iceberg table name
 
         Args:
-            namespace: Iceberg namespace (e.g., 'bronze.siebel')
+            namespace: Iceberg namespace (e.g., 'bronze.dev_source')
             table_name: Table name
 
         Returns:
-            Fully qualified table name (e.g., 'local.bronze.siebel.customers')
+            Fully qualified table name (e.g., 'local.bronze.dev_source.customers')
         """
         return f"{self.catalog_name}.{namespace}.{table_name}"
 
