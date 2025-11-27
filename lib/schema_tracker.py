@@ -5,12 +5,16 @@ Tracks schema changes in Iceberg table for transformation developer awareness
 
 import logging
 import json
+import threading
 from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType
 from pyspark.sql.utils import AnalysisException
 
 logger = logging.getLogger(__name__)
+
+# Global lock for schema tracker writes (shared across all instances)
+_schema_write_lock = threading.Lock()
 
 
 class SchemaTracker:
@@ -127,7 +131,10 @@ class SchemaTracker:
         }]
 
         df = self.spark.createDataFrame(change_data, schema=self._get_changes_schema())
-        df.writeTo(self.changes_table).using("iceberg").append()
+
+        # Thread-safe write to prevent concurrent modification errors
+        with _schema_write_lock:
+            df.writeTo(self.changes_table).using("iceberg").append()
 
         logger.info(f"Recorded baseline schema for {table_name} ({len(schema.fields)} columns)")
 
@@ -255,7 +262,10 @@ class SchemaTracker:
         # Record changes if any detected
         if changes:
             df = self.spark.createDataFrame(changes, schema=self._get_changes_schema())
-            df.writeTo(self.changes_table).using("iceberg").append()
+
+            # Thread-safe write to prevent concurrent modification errors
+            with _schema_write_lock:
+                df.writeTo(self.changes_table).using("iceberg").append()
 
             logger.warning(f"Detected {len(changes)} schema change(s) for {table_name}:")
             for change in changes:

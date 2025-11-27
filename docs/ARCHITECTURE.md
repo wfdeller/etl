@@ -37,14 +37,15 @@ This is a production-grade ETL pipeline that extracts data from transactional da
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │         Apache Iceberg Lakehouse (Bronze Layer)            │  │
 │  │                                                             │  │
-│  │  Catalog: Local Hadoop                                      │  │
+│  │  Catalog: Configurable (local, Unity Catalog)              │  │
 │  │  Format: Parquet (default)                                  │  │
-│  │  Location: /opt/data/lakehouse/warehouse/                   │  │
+│  │  Location: Configurable via $WAREHOUSE_PATH                 │  │
+│  │           (file://, s3://, dbfs://)                        │  │
 │  │                                                             │  │
 │  │  Namespaces:                                                │  │
-│  │    • local.bronze.siebel (Oracle tables)                   │  │
-│  │    • local.bronze.aurora_db1 (Postgres tables)             │  │
-│  │    • local.bronze.*._cdc_status (Status tracking)          │  │
+│  │    • {catalog}.bronze.siebel (Oracle tables)               │  │
+│  │    • {catalog}.bronze.aurora_db1 (Postgres tables)         │  │
+│  │    • {catalog}.bronze.*._cdc_status (Status tracking)      │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────┘
 
@@ -401,9 +402,10 @@ spark.network.timeout: 600s
 ### Logging
 
 **Current Implementation**:
-- File-based: `/opt/pipeline/logs/*.log`
+- File-based: `logs/*.log` (configurable via $LOG_DIR)
 - Console output (stdout/stderr)
 - Structured format with thread names
+- Supports local filesystem, DBFS, and S3 storage
 
 **Log Levels**:
 - INFO: Normal operations, progress
@@ -507,10 +509,10 @@ python jobs/validate_iceberg_tables.py --source dev_siebel --no-check-missing
 **Scenario 1: Bulk Load Failure**
 ```bash
 # Review logs
-tail -f /opt/pipeline/logs/direct_load.log
+tail -f logs/direct_load.log
 
 # Check status table
-spark-sql -e "SELECT * FROM local.bronze.siebel._cdc_status WHERE load_status = 'failed'"
+spark-sql -e "SELECT * FROM {catalog}.bronze.siebel._cdc_status WHERE load_status = 'failed'"
 
 # Resume from checkpoint
 python jobs/direct_bulk_load.py --source dev_siebel
@@ -518,8 +520,9 @@ python jobs/direct_bulk_load.py --source dev_siebel
 
 **Scenario 2: CDC Consumer Crash**
 ```bash
-# Check checkpoint exists
-ls /opt/pipeline/checkpoints/bronze.siebel/
+# Check checkpoint exists (path configured via $CHECKPOINT_PATH)
+ls checkpoints/bronze.siebel/
+# Or for cloud: aws s3 ls s3://bucket/checkpoints/bronze.siebel/
 
 # Restart consumer (auto-resumes)
 python jobs/cdc_kafka_to_iceberg.py --source dev_siebel

@@ -163,6 +163,27 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - **Files**: `lib/monitoring.py`, `lib/data_quality.py`, `lib/config_loader.py`,
     `docs/MONITORING_INTEGRATION_GUIDE.md`
 
+### Configuration - Phase 12
+- [DONE] Fix config loader to validate only requested source
+  - Modified `lib/config_loader.py` to load raw YAML first, then substitute env vars only for requested source
+  - Added `load_config_raw()` function for YAML loading without env var substitution
+  - Allows loading PostgreSQL source without Oracle credentials and vice versa
+  - **Files**: `lib/config_loader.py`
+
+### Thread Safety - Phase 13
+- [DONE] Implement thread-safe locking for schema tracker
+  - Added global `threading.Lock()` to prevent concurrent write errors to `_schema_changes` table
+  - Wrapped write operations in `record_baseline_schema()` and `detect_and_record_changes()`
+  - Fixes Iceberg metadata file contention during parallel bulk loads with 4+ workers
+  - **Files**: `lib/schema_tracker.py`
+
+### Bug Fixes - Phase 14
+- [DONE] Fix Spark Row.get() bug in status tracker
+  - Fixed `existing.get('primary_keys', [])` which fails because Row objects don't have `.get()` method
+  - Changed to `existing['primary_keys'] if 'primary_keys' in existing.asDict() else []`
+  - Eliminates "Could not retrieve existing status: get" warnings during bulk loads
+  - **Files**: `lib/status_tracker.py:232`
+
 ---
 
 ## Short Term (Next Sprint)

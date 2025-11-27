@@ -229,7 +229,8 @@ class CDCStatusTracker:
             if existing:
                 initial_start = existing['initial_load_start']
                 source_db = existing['source_db']
-                existing_pks = existing.get('primary_keys', [])
+                # Row objects don't have .get() method, check if field exists
+                existing_pks = existing['primary_keys'] if 'primary_keys' in existing.asDict() else []
             else:
                 initial_start = None
                 source_db = None

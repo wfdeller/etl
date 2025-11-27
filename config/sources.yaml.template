@@ -50,8 +50,7 @@ sources:
                                       # error: Fail job if LONG columns found
                                       # Note: LONG columns cannot be read via Spark JDBC due to
                                       #       Oracle subquery restrictions. See docs/ORACLE_LONG_LIMITATIONS.md
-      checkpoint_enabled: true
-      checkpoint_interval: 50         # Checkpoint every N tables
+      checkpoint_enabled: true        # Resume from completed tables (uses status tracker)
       max_retries: 3                  # Retries per table (0 = no retry)
       retry_backoff: 2                # Exponential backoff multiplier
       large_table_threshold: 100000   # Rows - triggers disk persistence
@@ -66,6 +65,15 @@ sources:
     #   TABLE_NAME: [COLUMN1]              # Single column primary key
     #   OTHER_TABLE: [COL1, COL2]          # Composite key
     #   NO_PK_TABLE: [UNIQUE_ID]           # Override for table without PK
+
+    # Optional: Data quality validation
+    # Enables validation checks during bulk load (see docs/MONITORING_INTEGRATION_GUIDE.md)
+    # data_quality:
+    #   check_row_count: true              # Validate row counts match source
+    #   row_count_tolerance: 0.01          # Allow 1% difference (float 0.0-1.0)
+    #   required_columns:                  # Per-table NOT NULL validation
+    #     TABLE_NAME: [COL1, COL2]         # Columns that must not be null
+    #     OTHER_TABLE: [ID_COLUMN]
 
   prod_aurora_db1:
     database_type: postgres
@@ -86,7 +94,6 @@ sources:
       batch_size: 50000
       skip_empty_tables: true
       checkpoint_enabled: true
-      checkpoint_interval: 50
       max_retries: 3
       retry_backoff: 2
       large_table_threshold: 100000
@@ -119,7 +126,6 @@ sources:
       skip_empty_tables: true
       handle_long_columns: exclude
       checkpoint_enabled: true
-      checkpoint_interval: 100
       max_retries: 3
       retry_backoff: 2
       large_table_threshold: 1000000    # Higher threshold for cloud storage
@@ -155,7 +161,6 @@ sources:
       skip_empty_tables: false
       handle_long_columns: exclude
       checkpoint_enabled: true
-      checkpoint_interval: 50
       max_retries: 3
       retry_backoff: 2
       large_table_threshold: 100000

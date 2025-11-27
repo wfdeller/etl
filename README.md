@@ -196,7 +196,7 @@ curl -L https://repo1.maven.org/maven2/com/oracle/database/jdbc/ojdbc8/21.9.0.0/
 
 # Download PostgreSQL JDBC Driver
 curl -L https://jdbc.postgresql.org/download/postgresql-42.7.1.jar \
-  -o jars/postgresql-42.7.1.jar
+  -o jars/postgresql.jar
 
 # Verify downloads
 ls -lh jars/
@@ -204,8 +204,8 @@ ls -lh jars/
 
 You should see:
 ```
-ojdbc8.jar           (approx 4-5 MB)
-postgresql-42.7.1.jar (approx 1 MB)
+ojdbc8.jar      (approx 4-5 MB)
+postgresql.jar (approx 1 MB)
 ```
 
 ## Step 6: Set Up Environment Variables

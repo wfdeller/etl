@@ -90,10 +90,15 @@ def _validate_bulk_load_config(source_name: str, source_config: Dict[str, Any]) 
 
     Ensures:
     - bulk_load is a dictionary
-    - parallel_partitions_per_table is a positive integer
-    - parallel_table_workers is a positive integer
-    - max_retries is a non-negative integer
+    - parallel_tables is a positive integer (JDBC partitions per table)
+    - parallel_workers is a positive integer (concurrent table processing)
+    - batch_size is a positive integer (JDBC fetch size)
+    - skip_empty_tables is a boolean
+    - handle_long_columns is one of: exclude, skip_table, error (Oracle only)
     - checkpoint_enabled is a boolean
+    - max_retries is a non-negative integer
+    - retry_backoff is a positive number
+    - large_table_threshold is a positive integer
     """
     if 'bulk_load' not in source_config:
         return  # Optional section
@@ -105,20 +110,53 @@ def _validate_bulk_load_config(source_name: str, source_config: Dict[str, Any]) 
             f"Source '{source_name}': 'bulk_load' must be a dictionary, got {type(bulk_load).__name__}"
         )
 
-    # Validate parallel_partitions_per_table
-    if 'parallel_partitions_per_table' in bulk_load:
-        partitions = bulk_load['parallel_partitions_per_table']
+    # Validate parallel_tables
+    if 'parallel_tables' in bulk_load:
+        partitions = bulk_load['parallel_tables']
         if not isinstance(partitions, int) or partitions <= 0:
             raise ValueError(
-                f"Source '{source_name}': 'parallel_partitions_per_table' must be a positive integer, got {partitions}"
+                f"Source '{source_name}': 'parallel_tables' must be a positive integer, got {partitions}"
             )
 
-    # Validate parallel_table_workers
-    if 'parallel_table_workers' in bulk_load:
-        workers = bulk_load['parallel_table_workers']
+    # Validate parallel_workers
+    if 'parallel_workers' in bulk_load:
+        workers = bulk_load['parallel_workers']
         if not isinstance(workers, int) or workers <= 0:
             raise ValueError(
-                f"Source '{source_name}': 'parallel_table_workers' must be a positive integer, got {workers}"
+                f"Source '{source_name}': 'parallel_workers' must be a positive integer, got {workers}"
+            )
+
+    # Validate batch_size
+    if 'batch_size' in bulk_load:
+        batch_size = bulk_load['batch_size']
+        if not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError(
+                f"Source '{source_name}': 'batch_size' must be a positive integer, got {batch_size}"
+            )
+
+    # Validate skip_empty_tables
+    if 'skip_empty_tables' in bulk_load:
+        skip_empty = bulk_load['skip_empty_tables']
+        if not isinstance(skip_empty, bool):
+            raise ValueError(
+                f"Source '{source_name}': 'skip_empty_tables' must be a boolean, got {type(skip_empty).__name__}"
+            )
+
+    # Validate handle_long_columns (Oracle only)
+    if 'handle_long_columns' in bulk_load:
+        handle_long = bulk_load['handle_long_columns']
+        valid_options = ['exclude', 'skip_table', 'error']
+        if handle_long not in valid_options:
+            raise ValueError(
+                f"Source '{source_name}': 'handle_long_columns' must be one of {valid_options}, got '{handle_long}'"
+            )
+
+    # Validate checkpoint_enabled
+    if 'checkpoint_enabled' in bulk_load:
+        checkpoint = bulk_load['checkpoint_enabled']
+        if not isinstance(checkpoint, bool):
+            raise ValueError(
+                f"Source '{source_name}': 'checkpoint_enabled' must be a boolean, got {type(checkpoint).__name__}"
             )
 
     # Validate max_retries
@@ -129,12 +167,20 @@ def _validate_bulk_load_config(source_name: str, source_config: Dict[str, Any]) 
                 f"Source '{source_name}': 'max_retries' must be a non-negative integer, got {retries}"
             )
 
-    # Validate checkpoint_enabled
-    if 'checkpoint_enabled' in bulk_load:
-        checkpoint = bulk_load['checkpoint_enabled']
-        if not isinstance(checkpoint, bool):
+    # Validate retry_backoff
+    if 'retry_backoff' in bulk_load:
+        backoff = bulk_load['retry_backoff']
+        if not isinstance(backoff, (int, float)) or backoff <= 0:
             raise ValueError(
-                f"Source '{source_name}': 'checkpoint_enabled' must be a boolean, got {type(checkpoint).__name__}"
+                f"Source '{source_name}': 'retry_backoff' must be a positive number, got {backoff}"
+            )
+
+    # Validate large_table_threshold
+    if 'large_table_threshold' in bulk_load:
+        threshold = bulk_load['large_table_threshold']
+        if not isinstance(threshold, int) or threshold <= 0:
+            raise ValueError(
+                f"Source '{source_name}': 'large_table_threshold' must be a positive integer, got {threshold}"
             )
 
 

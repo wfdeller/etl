@@ -558,64 +558,68 @@ def drop_namespace_tables(spark: SparkSession, namespace: str, catalog: str, aut
         # Get list of tables
         tables_df = spark.sql(f"SHOW TABLES IN {full_namespace}")
         tables = [row.tableName for row in tables_df.collect()]
-
-        if not tables:
-            logger.info(f"No tables found in {full_namespace} - nothing to drop")
+    except Exception as e:
+        # If namespace doesn't exist, that's fine - nothing to drop
+        if "NoSuchNamespaceException" in str(type(e)) or "Namespace does not exist" in str(e):
+            logger.info(f"Namespace {full_namespace} does not exist yet - nothing to drop")
             return True
-
-        # Show warning
-        logger.warning("="*80)
-        logger.warning("FRESH START MODE - ALL DATA WILL BE DELETED")
-        logger.warning("="*80)
-        logger.warning(f"Namespace: {full_namespace}")
-        logger.warning(f"Tables to drop: {len(tables)}")
-        logger.warning("")
-        logger.warning("Tables:")
-        for table in sorted(tables):
-            logger.warning(f"  - {table}")
-        logger.warning("")
-        logger.warning("This action CANNOT be undone!")
-        logger.warning("="*80)
-
-        # Confirmation prompt
-        if not auto_confirm:
-            import sys
-            if sys.stdin.isatty():
-                response = input("\nType 'YES' to confirm deletion: ")
-                if response != 'YES':
-                    logger.info("Fresh start cancelled by user")
-                    return False
-            else:
-                logger.error("Cannot prompt for confirmation in non-interactive mode. Use --yes flag.")
-                return False
         else:
-            logger.warning("Auto-confirm enabled - proceeding with deletion")
+            # Re-raise if it's a different error
+            raise
 
-        # Drop all tables
-        logger.info(f"Dropping {len(tables)} tables from {full_namespace}")
-        dropped_count = 0
-        failed_tables = []
-
-        for table in tables:
-            try:
-                full_table_name = f"{full_namespace}.{table}"
-                spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
-                logger.info(f"Dropped: {table}")
-                dropped_count += 1
-            except Exception as e:
-                logger.error(f"Failed to drop {table}: {e}")
-                failed_tables.append(table)
-
-        logger.info(f"Successfully dropped {dropped_count}/{len(tables)} tables")
-
-        if failed_tables:
-            logger.warning(f"Failed to drop {len(failed_tables)} tables: {', '.join(failed_tables)}")
-
+    if not tables:
+        logger.info(f"No tables found in {full_namespace} - nothing to drop")
         return True
 
-    except Exception as e:
-        logger.error(f"Error dropping tables: {e}")
-        return False
+    # Show warning
+    logger.warning("="*80)
+    logger.warning("FRESH START MODE - ALL DATA WILL BE DELETED")
+    logger.warning("="*80)
+    logger.warning(f"Namespace: {full_namespace}")
+    logger.warning(f"Tables to drop: {len(tables)}")
+    logger.warning("")
+    logger.warning("Tables:")
+    for table in sorted(tables):
+        logger.warning(f"  - {table}")
+    logger.warning("")
+    logger.warning("This action CANNOT be undone!")
+    logger.warning("="*80)
+
+    # Confirmation prompt
+    if not auto_confirm:
+        import sys
+        if sys.stdin.isatty():
+            response = input("\nType 'YES' to confirm deletion: ")
+            if response != 'YES':
+                logger.info("Fresh start cancelled by user")
+                return False
+        else:
+            logger.error("Cannot prompt for confirmation in non-interactive mode. Use --yes flag.")
+            return False
+    else:
+        logger.warning("Auto-confirm enabled - proceeding with deletion")
+
+    # Drop all tables
+    logger.info(f"Dropping {len(tables)} tables from {full_namespace}")
+    dropped_count = 0
+    failed_tables = []
+
+    for table in tables:
+        try:
+            full_table_name = f"{full_namespace}.{table}"
+            spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
+            logger.info(f"Dropped: {table}")
+            dropped_count += 1
+        except Exception as e:
+            logger.error(f"Failed to drop {table}: {e}")
+            failed_tables.append(table)
+
+    logger.info(f"Successfully dropped {dropped_count}/{len(tables)} tables")
+
+    if failed_tables:
+        logger.warning(f"Failed to drop {len(failed_tables)} tables: {', '.join(failed_tables)}")
+
+    return True
 
 
 def clear_checkpoint_directory(namespace: str):
