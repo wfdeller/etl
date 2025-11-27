@@ -231,7 +231,7 @@ def main():
     parser.add_argument(
         '--source',
         required=True,
-        help='Source name from sources.yaml (e.g., dev_siebel)'
+        help='Source name from sources.yaml (e.g., dev_source)'
     )
     parser.add_argument(
         '--hide-empty',

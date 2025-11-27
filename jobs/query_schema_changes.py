@@ -179,26 +179,26 @@ def main():
         epilog="""
 Examples:
   # List all tables with schema changes
-  %(prog)s --source dev_siebel --list-tables
+  %(prog)s --source dev_source --list-tables
 
   # Query all schema changes for a specific table
-  %(prog)s --source dev_siebel --table S_CONTACT
+  %(prog)s --source dev_source --table S_CONTACT
 
   # Query all schema changes since a specific date
-  %(prog)s --source dev_siebel --since 2025-01-01
+  %(prog)s --source dev_source --since 2025-01-01
 
   # Query specific change type
-  %(prog)s --source dev_siebel --table S_CONTACT --change-type column_added
+  %(prog)s --source dev_source --table S_CONTACT --change-type column_added
 
   # Export to CSV
-  %(prog)s --source dev_siebel --table S_CONTACT --output csv --file /tmp/changes.csv
+  %(prog)s --source dev_source --table S_CONTACT --output csv --file /tmp/changes.csv
         """
     )
 
     parser.add_argument(
         '--source',
         required=True,
-        help='Source name from sources.yaml (e.g., dev_siebel)'
+        help='Source name from sources.yaml (e.g., dev_source)'
     )
 
     parser.add_argument(

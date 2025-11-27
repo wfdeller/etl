@@ -544,7 +544,7 @@ def drop_namespace_tables(spark: SparkSession, namespace: str, catalog: str, aut
 
     Args:
         spark: SparkSession
-        namespace: Iceberg namespace (e.g., 'bronze.siebel')
+        namespace: Iceberg namespace (e.g., 'bronze.dev_source')
         catalog: Iceberg catalog name (required)
         auto_confirm: Skip confirmation prompt
 
@@ -664,7 +664,7 @@ def main():
     parser.add_argument(
         '--source',
         required=True,
-        help='Source name from sources.yaml (e.g., dev_siebel, prod_aurora_db1)'
+        help='Source name from sources.yaml (e.g., dev_source, prod_aurora_db1)'
     )
     parser.add_argument(
         '--parallel-tables',

@@ -2,13 +2,13 @@
 """
 Oracle to PostgreSQL Migration Script
 
-Migrates schema and data from Oracle Siebel to PostgreSQL.
+Migrates schema and data from Oracle to PostgreSQL.
 Creates database, tables, and copies data with type conversion.
 
 Usage:
-    python jobs/oracle_to_postgres_migration.py --source dev_siebel --table-filter "TABLE1|TABLE2"
-    python jobs/oracle_to_postgres_migration.py --source dev_siebel --schema-only
-    python jobs/oracle_to_postgres_migration.py --source dev_siebel --resume-from S_CONTACT
+    python jobs/oracle_to_postgres_migration.py --source dev_source --table-filter "TABLE1|TABLE2"
+    python jobs/oracle_to_postgres_migration.py --source dev_source --schema-only
+    python jobs/oracle_to_postgres_migration.py --source dev_source --resume-from S_CONTACT
 """
 
 import argparse
@@ -598,12 +598,12 @@ class OracleToPostgresMigration:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Migrate Oracle Siebel schema to PostgreSQL'
+        description='Migrate Oracle schema to PostgreSQL'
     )
     parser.add_argument(
         '--source',
         required=True,
-        help='Source name from sources.yaml (e.g., dev_siebel)'
+        help='Source name from sources.yaml (e.g., dev_source)'
     )
     parser.add_argument(
         '--table-filter',
@@ -641,8 +641,8 @@ def main():
     )
     parser.add_argument(
         '--pg-database',
-        default='siebel',
-        help='PostgreSQL target database (default: siebel)'
+        default='unknown',
+        help='PostgreSQL target database (default: unknown)'
     )
 
     args = parser.parse_args()
