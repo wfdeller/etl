@@ -60,7 +60,7 @@ All TODO items and architecture decisions prioritize Databricks compatibility. L
   - Added `get_primary_key_columns()` to both Oracle and PostgreSQL extractors
   - Extended status tracker schema with `primary_keys` column (ArrayType)
   - Implemented `get_primary_keys_map()` in CDC consumer to load PK metadata at startup
-  - Replaced hardcoded ROW_ID logic with dynamic PK handling supporting composite keys
+  - Replaced hardcoded fallback logic with dynamic PK handling supporting composite keys (using ROWID for Oracle, first column for others)
   - Added `primary_keys` configuration section to `sources.yaml.template` for manual overrides
   - Implemented config validation in `config_loader.py` for primary_keys section
   - **Files**: `lib/extractors/oracle_extractor.py`, `lib/extractors/postgres_extractor.py`,

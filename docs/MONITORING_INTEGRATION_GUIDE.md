@@ -246,7 +246,7 @@ if struct_logger:
 **Rationale**:
 - Extractors log from multiple threads, table name prefix is crucial for debugging
 - Root logger configuration already adds timestamps and thread names
-- Combined format: `2025-01-25 10:30:45 - [Thread-3] - extractors.oracle - INFO - S_CONTACT: Extracting 1000 records`
+- Combined format: `2025-01-25 10:30:45 - [Thread-3] - extractors.oracle - INFO - CUSTOMERS: Extracting 1000 records`
 
 ### 4. Configuration Examples
 
@@ -270,17 +270,17 @@ sources:
 
       # Required columns per table (cannot be null)
       required_columns:
-        S_CONTACT:
-          - ROW_ID
+        CUSTOMERS:
+          - CUSTOMER_ID
           - CREATED
-        S_ORG_EXT:
-          - ROW_ID
-          - NAME
+        ORDERS:
+          - ORDER_ID
+          - ORDER_DATE
 
       # Checksum validation for critical tables (expensive)
       checksum_tables:
-        - S_CONTACT
-        - S_ORG_EXT
+        - CUSTOMERS
+        - ORDERS
 ```
 
 ## Testing Integration
@@ -290,7 +290,7 @@ sources:
 1. **Local Test (without CloudWatch)**:
 ```bash
 export CONFIG_DIR=./config
-python jobs/direct_bulk_load.py --source dev_siebel --table-filter "S_CONTACT"
+python jobs/direct_bulk_load.py --source dev_mydb --table-filter "CUSTOMERS"
 ```
 
 Check logs for:
@@ -318,11 +318,11 @@ data_quality:
 
 2. Run load:
 ```bash
-python jobs/direct_bulk_load.py --source dev_siebel --table-filter "S_CONTACT"
+python jobs/direct_bulk_load.py --source dev_mydb --table-filter "CUSTOMERS"
 ```
 
 3. Check logs for:
-- `S_CONTACT: Row count validation PASSED - source: 1000, dest: 1000`
+- `CUSTOMERS: Row count validation PASSED - source: 1000, dest: 1000`
 
 ## Rollback Instructions
 

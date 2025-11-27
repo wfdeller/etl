@@ -190,7 +190,7 @@ def get_table_scn_map(tracker: CDCStatusTracker) -> Dict[str, int]:
 def get_primary_keys_map(tracker: CDCStatusTracker) -> Dict[str, list]:
     """
     Get a mapping of table_name -> primary_keys for all completed tables
-    This allows dynamic PK-based MERGE/DELETE operations instead of hardcoding ROW_ID
+    This allows dynamic PK-based MERGE/DELETE operations
 
     Returns:
         dict: {table_name: [pk_column1, pk_column2, ...]}
@@ -295,12 +295,12 @@ def apply_cdc_event(spark: SparkSession, iceberg_mgr: IcebergTableManager, names
         pk_cols = primary_keys_map[table_name]
         logger.debug(f"{table_name}: using primary keys from metadata: {pk_cols}")
     else:
-        # Fallback to ROW_ID (Siebel) or first column
+        # Fallback to ROWID (Oracle) or first column
         sample_data = after or before
         if sample_data:
-            if 'ROW_ID' in sample_data:
-                pk_cols = ['ROW_ID']
-                logger.debug(f"{table_name}: using fallback primary key: ROW_ID")
+            if 'ROWID' in sample_data:
+                pk_cols = ['ROWID']
+                logger.debug(f"{table_name}: using fallback primary key: ROWID")
             else:
                 pk_cols = [list(sample_data.keys())[0]]
                 logger.warning(f"{table_name}: no primary key metadata found, using first column: {pk_cols[0]}")
@@ -426,7 +426,7 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
     jdbc_url = source_config['database_connection'].get('url', '')
     source_db = jdbc_url.split('@')[-1] if '@' in jdbc_url else jdbc_url
 
-    # Build topic pattern (e.g., dev.siebel.SIEBEL.*)
+    # Build topic pattern (e.g., dev.mydb.SCHEMA.*)
     schema = source_config['database_connection']['schema']
     topic_pattern = f"{topic_prefix}.{schema}.*"
     

@@ -68,15 +68,15 @@ When a table is loaded for the first time via `direct_bulk_load.py`, the pipelin
 **Example baseline record:**
 ```json
 {
-  "change_id": "S_CONTACT_20250125_143022_123456_baseline",
-  "table_name": "S_CONTACT",
+  "change_id": "CUSTOMERS_20250125_143022_123456_baseline",
+  "table_name": "CUSTOMERS",
   "change_type": "baseline",
   "column_name": null,
   "old_data_type": null,
   "new_data_type": null,
   "detected_timestamp": "2025-01-25T14:30:22",
   "source_db": "oracle.example.com:1521/PROD",
-  "change_details": "{\"fields\": [{\"name\": \"ROW_ID\", \"type\": \"StringType\", \"nullable\": false}, ...]}"
+  "change_details": "{\"fields\": [{\"name\": \"CUSTOMER_ID\", \"type\": \"StringType\", \"nullable\": false}, ...]}"
 }
 ```
 
@@ -93,8 +93,8 @@ During CDC processing in `cdc_kafka_to_iceberg.py`, before applying each CDC eve
 **Example column addition:**
 ```json
 {
-  "change_id": "S_CONTACT_20250125_153045_789012_add_EMAIL_ADDR",
-  "table_name": "S_CONTACT",
+  "change_id": "CUSTOMERS_20250125_153045_789012_add_EMAIL_ADDR",
+  "table_name": "CUSTOMERS",
   "change_type": "column_added",
   "column_name": "EMAIL_ADDR",
   "old_data_type": null,
@@ -110,7 +110,7 @@ During CDC processing in `cdc_kafka_to_iceberg.py`, before applying each CDC eve
 When schema changes are detected during CDC processing, the system logs warnings:
 
 ```
-2025-01-25 15:30:45 - WARNING - Schema change detected in S_CONTACT: column_added - column EMAIL_ADDR (None -> StringType)
+2025-01-25 15:30:45 - WARNING - Schema change detected in CUSTOMERS: column_added - column EMAIL_ADDR (None -> StringType)
 ```
 
 These warnings appear in:
@@ -126,7 +126,7 @@ The `query_schema_changes.py` CLI tool provides flexible querying capabilities:
 #### List All Tables with Changes
 
 ```bash
-python jobs/query_schema_changes.py --source dev_siebel --list-tables
+python jobs/query_schema_changes.py --source dev_mydb --list-tables
 ```
 
 Output:
@@ -134,7 +134,7 @@ Output:
 +-------------+-----+
 |   table_name|count|
 +-------------+-----+
-|    S_CONTACT|    3|
+|    CUSTOMERS|    3|
 |     S_ACCNT |    1|
 | S_ACT_PLAN  |    2|
 +-------------+-----+
@@ -143,25 +143,25 @@ Output:
 #### Query All Changes for a Table
 
 ```bash
-python jobs/query_schema_changes.py --source dev_siebel --table S_CONTACT
+python jobs/query_schema_changes.py --source dev_mydb --table CUSTOMERS
 ```
 
 #### Filter by Change Type
 
 ```bash
-python jobs/query_schema_changes.py --source dev_siebel --table S_CONTACT --change-type column_added
+python jobs/query_schema_changes.py --source dev_mydb --table CUSTOMERS --change-type column_added
 ```
 
 #### Filter by Date
 
 ```bash
-python jobs/query_schema_changes.py --source dev_siebel --since 2025-01-01
+python jobs/query_schema_changes.py --source dev_mydb --since 2025-01-01
 ```
 
 #### Export to CSV
 
 ```bash
-python jobs/query_schema_changes.py --source dev_siebel --table S_CONTACT --output csv --file /tmp/changes.csv
+python jobs/query_schema_changes.py --source dev_mydb --table CUSTOMERS --output csv --file /tmp/changes.csv
 ```
 
 ### Querying Directly with Spark SQL
@@ -178,7 +178,7 @@ SELECT
   detected_timestamp,
   source_db
 FROM local.bronze.siebel._schema_changes
-WHERE table_name = 'S_CONTACT'
+WHERE table_name = 'CUSTOMERS'
 ORDER BY detected_timestamp DESC;
 
 -- Recent changes across all tables
@@ -242,7 +242,7 @@ To disable schema tracking (not recommended for production):
 1. **Check Schema Changes Before Coding**
    ```bash
    # Check if your source table has recent changes
-   python jobs/query_schema_changes.py --source dev_siebel --table YOUR_TABLE --since 2025-01-01
+   python jobs/query_schema_changes.py --source dev_mydb --table YOUR_TABLE --since 2025-01-01
    ```
 
 2. **Handle Schema Evolution Gracefully**

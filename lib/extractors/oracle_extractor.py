@@ -100,26 +100,29 @@ class OracleTableExtractor(BaseTableExtractor):
                 logger.info(f"{table_name}: found primary key columns: {', '.join(pk_cols)}")
                 return pk_cols
             else:
-                # Fallback to ROW_ID if no explicit primary key
-                logger.info(f"{table_name}: no primary key found, will use ROW_ID")
-                return ['ROW_ID']
+                # Fallback to Oracle's ROWID pseudo-column if no explicit primary key
+                logger.info(f"{table_name}: no primary key found, will use ROWID")
+                return ['ROWID']
         except Exception as e:
-            logger.warning(f"{table_name}: could not determine primary key: {e}, using ROW_ID")
-            return ['ROW_ID']
+            logger.warning(f"{table_name}: could not determine primary key: {e}, using ROWID")
+            return ['ROWID']
 
     def build_query(self, table_name, scn=None, exclude_long_columns=None):
-        """Build optimized Oracle query with SCN flashback"""
-        
+        """Build optimized Oracle query with SCN flashback
+
+        Note: Always includes ROWID pseudo-column for use as fallback primary key
+        """
+
         if exclude_long_columns:
             columns = self.get_non_long_columns(table_name)
             column_list = ", ".join(columns)
-            base = f"SELECT {column_list} FROM {self.schema}.{table_name}"
+            base = f"SELECT {column_list}, ROWID FROM {self.schema}.{table_name}"
         else:
-            base = f"SELECT * FROM {self.schema}.{table_name}"
-        
+            base = f"SELECT t.*, ROWID FROM {self.schema}.{table_name} t"
+
         if scn:
             base += f" AS OF SCN {scn}"
-        
+
         return base
     
     def get_row_count(self, table_name, scn=None):

@@ -61,7 +61,7 @@ This is a production-grade ETL pipeline that extracts data from transactional da
 │  ┌──────────────────────────────────────┐                        │
 │  │      Apache Kafka                    │                        │
 │  │  Topics: {prefix}.{schema}.{table}   │                        │
-│  │    e.g., dev.siebel.SIEBEL.S_CONTACT │                        │
+│  │    e.g., dev.mydb.MYSCHEMA.CUSTOMERS │                        │
 │  └──────┬───────────────────────────────┘                        │
 │         │                                                          │
 │         │ Spark Structured Streaming                              │
