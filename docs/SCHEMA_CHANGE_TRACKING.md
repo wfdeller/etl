@@ -32,7 +32,7 @@ This feature provides:
 
 ### Audit Table Schema
 
-The `_schema_changes` table is created in each namespace (e.g., `bronze.siebel._schema_changes`) with the following schema:
+The `_schema_changes` table is created in each namespace (e.g., `bronze.mydb._schema_changes`) with the following schema:
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -177,7 +177,7 @@ SELECT
   new_data_type,
   detected_timestamp,
   source_db
-FROM local.bronze.siebel._schema_changes
+FROM local.bronze.mydb._schema_changes
 WHERE table_name = 'CUSTOMERS'
 ORDER BY detected_timestamp DESC;
 
@@ -187,7 +187,7 @@ SELECT
   change_type,
   column_name,
   detected_timestamp
-FROM local.bronze.siebel._schema_changes
+FROM local.bronze.mydb._schema_changes
 WHERE detected_timestamp >= current_date() - INTERVAL 7 DAYS
 ORDER BY detected_timestamp DESC;
 
@@ -195,7 +195,7 @@ ORDER BY detected_timestamp DESC;
 SELECT
   change_type,
   COUNT(*) as change_count
-FROM local.bronze.siebel._schema_changes
+FROM local.bronze.mydb._schema_changes
 WHERE change_type != 'baseline'
 GROUP BY change_type
 ORDER BY change_count DESC;

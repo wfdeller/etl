@@ -170,21 +170,31 @@ With the virtual environment activated:
 pip install --upgrade pip
 
 # Install required Python packages
-pip install pyspark==3.5.0 pyyaml
+pip install pyspark==3.5.0 pyyaml psycopg2-binary jaydebeapi jpype1
 
 # Verify installation
-pip list | grep -E "pyspark|PyYAML"
+pip list | grep -E "pyspark|PyYAML|psycopg2|jaydebeapi|jpype1"
 ```
 
 You should see:
 ```
-pyspark       3.5.0
-PyYAML        6.0.x
+pyspark         3.5.0
+PyYAML          6.0.x
+psycopg2-binary 2.9.x
+jaydebeapi      1.2.x
+jpype1          1.6.x
 ```
 
-## Step 5: Download JDBC Drivers
+**Package purposes:**
+- `pyspark` - Apache Spark framework
+- `pyyaml` - YAML configuration file parsing
+- `psycopg2-binary` - PostgreSQL database adapter
+- `jaydebeapi` - JDBC driver access from Python
+- `jpype1` - Java-Python bridge (required by jaydebeapi)
 
-JDBC drivers allow Spark to connect to Oracle and PostgreSQL databases. Download them to the `jars/` directory:
+## Step 5: Download Required JARs
+
+Download JDBC drivers and Apache Iceberg runtime to the `jars/` directory:
 
 ```bash
 # Create jars directory in project root
@@ -198,15 +208,25 @@ curl -L https://repo1.maven.org/maven2/com/oracle/database/jdbc/ojdbc8/21.9.0.0/
 curl -L https://jdbc.postgresql.org/download/postgresql-42.7.1.jar \
   -o jars/postgresql.jar
 
+# Download Apache Iceberg Spark Runtime (for Spark 3.5 with Scala 2.12)
+curl -L https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/1.4.2/iceberg-spark-runtime-3.5_2.12-1.4.2.jar \
+  -o jars/iceberg-spark-runtime.jar
+
 # Verify downloads
 ls -lh jars/
 ```
 
 You should see:
 ```
-ojdbc8.jar      (approx 4-5 MB)
-postgresql.jar (approx 1 MB)
+iceberg-spark-runtime.jar  (approx 28 MB)
+ojdbc8.jar                 (approx 4-5 MB)
+postgresql.jar             (approx 1 MB)
 ```
+
+**JAR purposes:**
+- `iceberg-spark-runtime.jar` - Apache Iceberg data lakehouse format support
+- `ojdbc8.jar` - Oracle database connectivity
+- `postgresql.jar` - PostgreSQL database connectivity
 
 ## Step 6: Set Up Environment Variables
 
@@ -271,7 +291,59 @@ alias etl-env='cd /path/to/etl && source venv/bin/activate && source .env'
 etl-env
 ```
 
-## Step 7: Create Directory Structure
+## Step 7: Configure Spark (Required for spark-sql CLI)
+
+If you have a standalone Spark installation (not just PySpark), configure it to use the JARs system-wide.
+
+### Check for Spark Installation
+
+```bash
+# Check if you have standalone Spark installed
+which spark-sql
+# If found, continue with configuration below
+```
+
+### Configure spark-defaults.conf
+
+If you have Spark installed at `SPARK_HOME` (e.g., `/opt/spark` on macOS, `/usr/local/spark` on Linux):
+
+```bash
+# Find your SPARK_HOME
+echo $SPARK_HOME
+# or
+dirname $(dirname $(which spark-submit))
+
+# Edit spark-defaults.conf (may require sudo)
+sudo nano $SPARK_HOME/conf/spark-defaults.conf
+```
+
+Add the following configuration:
+
+```properties
+# Apache Iceberg Configuration
+spark.sql.extensions org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+spark.sql.catalog.local org.apache.iceberg.spark.SparkCatalog
+spark.sql.catalog.local.type hadoop
+spark.sql.catalog.local.warehouse file:///path/to/etl/warehouse
+
+# JAR files (update paths to match your project location)
+spark.jars /path/to/etl/jars/iceberg-spark-runtime.jar,/path/to/etl/jars/ojdbc8.jar,/path/to/etl/jars/postgresql.jar
+```
+
+**Important**: Replace `/path/to/etl` with your actual project path (e.g., `/Users/yourusername/Development/etl`).
+
+### Verify Configuration
+
+```bash
+# Test spark-sql with Iceberg catalog
+spark-sql -e "SHOW NAMESPACES IN local"
+
+# If successful, you should see your namespaces (e.g., bronze)
+```
+
+**Note**: If you don't have standalone Spark installed (only PySpark), skip this step. The Python jobs will still work using PySpark's built-in configuration.
+
+## Step 8: Create Directory Structure
 
 ```bash
 # Create required directories
@@ -297,7 +369,7 @@ venv/            # Python virtual environment
 .env             # Environment variables (DO NOT commit)
 ```
 
-## Step 8: Configure Database Sources
+## Step 9: Configure Database Sources
 
 ### Create Configuration from Template
 
@@ -359,7 +431,7 @@ kafka_clusters:
     auto_offset_reset: earliest
 ```
 
-## Step 9: Verify Installation
+## Step 10: Verify Installation
 
 Run a quick validation to ensure everything is set up correctly:
 
@@ -518,7 +590,59 @@ python jobs/validate_iceberg_tables.py --source dev_siebel --no-check-missing
 
 # Querying Data
 
-Once data is loaded, you can query it using PySpark:
+Once data is loaded, you can query it using either spark-sql CLI or PySpark.
+
+## Option 1: Using spark-sql CLI
+
+If you configured `spark-defaults.conf` in Step 7, you can use spark-sql directly:
+
+```bash
+# Activate environment
+source venv/bin/activate
+source .env
+
+# List all namespaces (databases)
+spark-sql -e "SHOW NAMESPACES IN local"
+
+# List tables in a namespace
+spark-sql -e "SHOW TABLES IN local.bronze.siebel_oracle"
+
+# Describe a table
+spark-sql -e "DESCRIBE local.bronze.siebel_oracle.S_CONTACT"
+
+# Query data
+spark-sql -e "SELECT COUNT(*) FROM local.bronze.siebel_oracle.S_CONTACT"
+
+# Interactive mode
+spark-sql
+```
+
+In interactive mode:
+```sql
+-- Show namespaces
+SHOW NAMESPACES IN local;
+
+-- Query tables
+SELECT * FROM local.bronze.siebel_oracle.S_CONTACT LIMIT 10;
+
+-- Check CDC status
+SELECT * FROM local.bronze.siebel_oracle._cdc_status;
+
+-- Time travel query
+SELECT * FROM local.bronze.siebel_oracle.S_CONTACT
+TIMESTAMP AS OF '2025-01-15 12:00:00'
+LIMIT 10;
+
+-- Exit
+quit;
+```
+
+**Note**: The table path format is `catalog.namespace.table`. For example:
+- Catalog: `local` (from `CATALOG_NAME` env var)
+- Namespace: `bronze.siebel_oracle` (from `iceberg_namespace` in sources.yaml)
+- Table: `S_CONTACT`
+
+## Option 2: Using PySpark
 
 ```python
 from pyspark.sql import SparkSession
@@ -533,24 +657,24 @@ spark = SparkSession.builder \
     .getOrCreate()
 
 # List tables
-spark.sql("SHOW TABLES IN local.bronze.siebel").show()
+spark.sql("SHOW TABLES IN local.bronze.siebel_oracle").show()
 
 # Query data
-spark.sql("SELECT * FROM local.bronze.siebel.s_contact LIMIT 10").show()
+spark.sql("SELECT * FROM local.bronze.siebel_oracle.S_CONTACT LIMIT 10").show()
 
 # Check load status
 spark.sql("""
     SELECT table_name, load_status, record_count,
            array_size(primary_keys) as pk_count,
            initial_load_end
-    FROM local.bronze.siebel._cdc_status
+    FROM local.bronze.siebel_oracle._cdc_status
     WHERE load_status = 'completed'
     ORDER BY initial_load_end DESC
 """).show(truncate=False)
 
 # Time travel (query data as of a specific timestamp)
 spark.sql("""
-    SELECT * FROM local.bronze.siebel.s_contact
+    SELECT * FROM local.bronze.siebel_oracle.S_CONTACT
     TIMESTAMP AS OF '2025-01-15 12:00:00'
     LIMIT 10
 """).show()

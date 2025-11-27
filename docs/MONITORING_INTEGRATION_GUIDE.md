@@ -254,7 +254,7 @@ if struct_logger:
 
 ```yaml
 sources:
-  dev_siebel:
+  dev_mydb:
     database_type: oracle
     # ... existing config ...
 
@@ -402,12 +402,394 @@ data_quality:
   checksum_tables: []    # Disable checksums (slow)
 ```
 
+## Dynatrace Integration
+
+### Overview
+
+Dynatrace provides advanced application performance monitoring (APM) with automatic instrumentation, distributed tracing, and AI-powered anomaly detection. The ETL pipeline has been enhanced with:
+
+1. **Correlation IDs** - For distributed tracing across Kafka → Spark → Iceberg
+2. **JMX Metrics** - Spark executor and JVM metrics
+3. **CDC Lag Tracking** - Real-time monitoring of replication lag
+4. **Throughput Metrics** - Processing rate monitoring
+5. **Enhanced Structured Logging** - Dynatrace-enriched log events
+
+### Prerequisites
+
+- Dynatrace SaaS or Managed environment
+- Dynatrace API token with `metrics.ingest` permission
+- Databricks cluster with init script capability (for OneAgent)
+
+### Phase 1: Core Infrastructure (Already Implemented)
+
+#### Correlation IDs
+
+The `lib/correlation.py` module provides distributed tracing capabilities:
+
+```python
+from correlation import get_correlation_id, set_correlation_id
+
+# Automatically generated per job/batch
+correlation_id = get_correlation_id()
+
+# Propagate through Kafka headers
+kafka_record.headers.add('correlation_id', correlation_id)
+
+# Set from incoming message
+set_correlation_id(incoming_correlation_id)
+```
+
+**Benefits:**
+- End-to-end request tracking across services
+- Links logs, metrics, and traces in Dynatrace
+- Enables service flow mapping
+
+#### Enhanced Structured Logging
+
+All log events now include Dynatrace-specific fields:
+
+```json
+{
+  "timestamp": "2025-01-27T10:30:45.123456",
+  "correlation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "job_name": "cdc_consumer",
+  "source_name": "bronze.siebel_oracle",
+  "event_type": "cdc_batch_complete",
+  "environment": "prod",
+  "severity": "INFO",
+  "details": {
+    "batch_id": 12345,
+    "events_processed": 1000,
+    "throughput_records_per_sec": 85.3,
+    "max_lag_seconds": 2.1
+  }
+}
+```
+
+**Dynatrace Configuration:**
+- Logs are automatically ingested by OneAgent
+- Use log enrichment rules to extract custom attributes
+- Create log metrics for alerting (e.g., `cdc_lag_seconds > 60`)
+
+#### Spark JMX Metrics
+
+Spark metrics are exported via JMX for OneAgent to scrape:
+
+**Configured in `lib/spark_utils.py`:**
+```python
+spark.metrics.conf.*.sink.jmx.class=org.apache.spark.metrics.sink.JmxSink
+spark.metrics.namespace=${spark.app.name}
+```
+
+**Metrics Available:**
+- Executor memory usage (heap/off-heap)
+- Task execution time and count
+- Shuffle read/write bytes
+- GC time and count
+- JVM thread count
+
+**Access in Dynatrace:**
+- Navigate to: Process group → Custom metrics
+- Filter by namespace: `<app_name>`
+- Create custom charts for memory, GC, shuffle
+
+### Phase 2: CDC Enhancements (Already Implemented)
+
+#### CDC Lag Tracking
+
+The CDC consumer now tracks replication lag:
+
+```python
+# Automatically calculated from Debezium ts_ms
+event_timestamp_ms = source_info.get('ts_ms')
+processing_timestamp_ms = int(time.time() * 1000)
+lag_seconds = (processing_timestamp_ms - event_timestamp_ms) / 1000.0
+
+# Emitted as CloudWatch metric
+metrics.emit_gauge('cdc_lag_seconds', lag_seconds,
+                  unit='Seconds',
+                  dimensions={'namespace': namespace})
+```
+
+**CloudWatch Metrics Emitted:**
+- `cdc_lag_seconds` - Time behind source database (max across batch)
+- `cdc_throughput_records_per_sec` - Processing rate
+- `cdc_batch_processing_time` - Batch duration
+- `cdc_events_processed` - Events processed count
+- `cdc_events_skipped` - Events skipped count
+
+**Import to Dynatrace:**
+1. Configure AWS integration in Dynatrace
+2. Enable CloudWatch metrics import
+3. Metrics appear under: Technologies → AWS → CloudWatch
+4. Create custom charts and alerts
+
+#### Throughput Monitoring
+
+Batch processing metrics provide visibility into pipeline performance:
+
+```python
+batch_duration = time.time() - batch_start_time
+throughput = events_processed / batch_duration
+
+metrics.emit_gauge('cdc_throughput_records_per_sec', throughput,
+                  unit='Count/Second')
+```
+
+**Structured Logging:**
+```json
+{
+  "event_type": "cdc_batch_complete",
+  "details": {
+    "batch_id": 12345,
+    "events_processed": 1000,
+    "batch_duration_seconds": 11.7,
+    "throughput_records_per_sec": 85.3,
+    "max_lag_seconds": 2.1
+  }
+}
+```
+
+### Phase 3: Dynatrace OneAgent Deployment
+
+#### Step 1: Create Dynatrace Init Script
+
+Create `/dbfs/databricks/init-scripts/install-dynatrace.sh`:
+
+```bash
+#!/bin/bash
+
+# Dynatrace environment configuration
+DYNATRACE_ENVIRONMENT_ID="${DYNATRACE_ENV_ID}"  # From secret scope
+DYNATRACE_API_TOKEN="${DYNATRACE_API_TOKEN}"    # From secret scope
+
+# Download OneAgent installer
+wget -O Dynatrace-OneAgent.sh \
+  "https://${DYNATRACE_ENVIRONMENT_ID}.live.dynatrace.com/api/v1/deployment/installer/agent/unix/default/latest?Api-Token=${DYNATRACE_API_TOKEN}"
+
+# Install OneAgent
+/bin/sh Dynatrace-OneAgent.sh \
+  --set-app-log-content-access=true \
+  --set-infra-only=false \
+  --set-host-group=databricks-etl \
+  --set-host-tag=environment=prod \
+  --set-host-tag=team=data-engineering
+
+# Verify installation
+if [ -f /opt/dynatrace/oneagent/agent/lib64/liboneagentproc.so ]; then
+  echo "Dynatrace OneAgent installed successfully"
+else
+  echo "Dynatrace OneAgent installation failed"
+  exit 1
+fi
+```
+
+#### Step 2: Configure Databricks Cluster
+
+**Cluster Configuration JSON:**
+```json
+{
+  "cluster_name": "etl-cdc-consumer",
+  "spark_version": "13.3.x-scala2.12",
+  "node_type_id": "i3.xlarge",
+  "num_workers": 4,
+  "init_scripts": [
+    {
+      "dbfs": {
+        "destination": "dbfs:/databricks/init-scripts/install-dynatrace.sh"
+      }
+    }
+  ],
+  "spark_env_vars": {
+    "DYNATRACE_ENV_ID": "{{secrets/dynatrace/environment_id}}",
+    "DYNATRACE_API_TOKEN": "{{secrets/dynatrace/api_token}}",
+    "DT_CUSTOM_PROP": "application=etl-pipeline,component=cdc-consumer,env=prod"
+  }
+}
+```
+
+#### Step 3: Create Databricks Secrets
+
+```bash
+# Create secret scope (one-time setup)
+databricks secrets create-scope --scope dynatrace
+
+# Add secrets
+databricks secrets put --scope dynatrace --key environment_id --string-value "<your-env-id>"
+databricks secrets put --scope dynatrace --key api_token --string-value "<your-token>"
+```
+
+#### Step 4: Verify Dynatrace Integration
+
+After cluster starts:
+
+1. **Check OneAgent Status:**
+```bash
+# SSH to cluster driver node
+sudo systemctl status oneagent
+
+# Check OneAgent logs
+sudo tail -f /var/log/dynatrace/oneagent/oneagent.log
+```
+
+2. **Verify in Dynatrace UI:**
+- Navigate to: Hosts → Filter by "databricks-etl"
+- Click on host → Process groups
+- Verify Spark driver and executor processes are detected
+- Check: Technologies → Java → View JMX metrics
+
+3. **Validate Distributed Tracing:**
+- Navigate to: Distributed traces
+- Filter by: `correlation_id` exists
+- Verify end-to-end traces from Kafka to Iceberg
+
+### Dynatrace Dashboards
+
+#### CDC Monitoring Dashboard
+
+**Tiles:**
+1. **CDC Lag** - Line chart of `cdc_lag_seconds` over time
+   - Alert threshold: > 60 seconds
+   - Critical threshold: > 300 seconds
+
+2. **Throughput** - Line chart of `cdc_throughput_records_per_sec`
+   - Color: Green > 50, Yellow 10-50, Red < 10
+
+3. **Batch Processing Time** - Line chart of `cdc_batch_processing_time`
+   - Alert if > 30 seconds (falling behind trigger interval)
+
+4. **Events Processed vs Skipped** - Stacked area chart
+   - `cdc_events_processed` and `cdc_events_skipped`
+
+5. **Spark Executor Memory** - Line chart from JMX
+   - Heap used / Heap max per executor
+
+6. **GC Time** - Line chart from JMX
+   - Total GC time per minute
+   - Alert if > 10% of processing time
+
+#### Service Flow Map
+
+Automatic topology discovery via correlation IDs:
+
+```
+[Oracle DB] → [Debezium] → [Kafka] → [Spark CDC Consumer] → [Iceberg Tables]
+```
+
+**To view:**
+1. Navigate to: Services
+2. Find: `spark-etl-cdc-consumer`
+3. Click: View service flow
+4. Dynatrace automatically maps dependencies
+
+### Alerting
+
+#### Recommended Alerts
+
+**CDC Lag Alert:**
+```
+Metric: cdc_lag_seconds
+Condition: > 60 for 5 minutes
+Severity: Warning
+
+Condition: > 300 for 2 minutes
+Severity: Critical
+```
+
+**Low Throughput Alert:**
+```
+Metric: cdc_throughput_records_per_sec
+Condition: < 10 for 10 minutes
+Severity: Warning
+```
+
+**Batch Processing Time Alert:**
+```
+Metric: cdc_batch_processing_time
+Condition: > 30 seconds for 3 consecutive batches
+Severity: Warning
+(Indicates falling behind)
+```
+
+**JVM Memory Alert:**
+```
+Metric: jvm.memory.heap.used / jvm.memory.heap.max
+Condition: > 0.9 (90%)
+Severity: Warning
+```
+
+### Troubleshooting with Dynatrace
+
+#### Scenario 1: High CDC Lag
+
+1. **Check Distributed Trace:**
+   - Filter by `correlation_id` of slow batch
+   - Identify bottleneck: Kafka read, CDC apply, Iceberg write
+
+2. **Check Spark Metrics:**
+   - Executor memory usage - is it spilling to disk?
+   - GC time - excessive garbage collection?
+   - Shuffle metrics - data skew?
+
+3. **Check Logs:**
+   - Filter by `event_type: cdc_batch_complete`
+   - Look for: `max_lag_seconds` trend
+   - Correlate with `batch_duration_seconds`
+
+#### Scenario 2: Falling Behind Warning
+
+**Message:** "Current batch is falling behind. The trigger interval is 10000 milliseconds, but spent 13232 milliseconds"
+
+**Investigation:**
+1. Check `cdc_batch_processing_time` metric
+2. Compare to trigger interval (10 seconds)
+3. If consistently > 10s, options:
+   - Reduce batch size (lower `maxOffsetsPerTrigger`)
+   - Increase parallelism (more executors/cores)
+   - Optimize CDC operations (check table-specific metrics)
+
+**Dynatrace Analysis:**
+```
+1. View service: spark-etl-cdc-consumer
+2. Check: Response time distribution
+3. Identify: Slow percentiles (p95, p99)
+4. Drill down: Slow requests → Find specific tables/operations
+```
+
+### Best Practices
+
+1. **Correlation ID Propagation:**
+   - Generate once at job/batch start
+   - Pass through all operations
+   - Include in Kafka headers when producing
+
+2. **Log Volume:**
+   - Use structured logging for all events
+   - Set appropriate log levels (INFO for key events, DEBUG for details)
+   - Dynatrace automatically indexes and searches
+
+3. **Metric Naming:**
+   - Use consistent prefixes: `cdc_`, `bulk_load_`
+   - Include dimensions: `namespace`, `table_name`
+   - Follow CloudWatch naming conventions
+
+4. **Dashboard Design:**
+   - Create separate dashboards per job type
+   - Include both application and infrastructure metrics
+   - Add links to related logs and traces
+
+5. **Alert Tuning:**
+   - Start with conservative thresholds
+   - Monitor for 1-2 weeks before adjusting
+   - Use Dynatrace AI for baseline detection
+
 ## Next Steps
 
 1. Complete integration following steps above
 2. Test in development environment
 3. Deploy to staging with CloudWatch enabled
-4. Monitor CloudWatch dashboard for 1 week
-5. Set up CloudWatch alarms for failure metrics
-6. Document any custom metrics needed
-7. Create Databricks SQL Analytics dashboards
+4. Deploy Dynatrace OneAgent to Databricks clusters
+5. Configure Dynatrace dashboards and alerts
+6. Monitor for 1 week and tune thresholds
+7. Document runbooks for common issues
+8. Train team on Dynatrace navigation and troubleshooting

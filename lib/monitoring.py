@@ -6,9 +6,19 @@ Supports CloudWatch (AWS), structured logging, and performance tracking
 import logging
 import time
 import json
+import os
+import uuid
 from datetime import datetime
 from typing import Dict, Optional, Any
 from contextlib import contextmanager
+
+# Import correlation ID utilities
+try:
+    from correlation import get_correlation_id
+except ImportError:
+    # Fallback if correlation module not available
+    def get_correlation_id():
+        return str(uuid.uuid4())
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +193,25 @@ class MetricsCollector:
         failure_dimensions['ErrorType'] = error_type
         self.emit_counter(f"{operation_name}_failure", count=1, dimensions=failure_dimensions)
 
+    def emit_gauge(self, metric_name: str, value: float,
+                   unit: str = 'None', dimensions: Optional[Dict[str, str]] = None):
+        """
+        Emit a gauge metric (point-in-time value)
+
+        Use for metrics like:
+        - CDC lag (seconds)
+        - Throughput (records/sec)
+        - Queue depth
+        - Memory usage
+
+        Args:
+            metric_name: Metric name (e.g., 'cdc_lag_seconds')
+            value: Current value
+            unit: CloudWatch unit (None, Seconds, Bytes, etc.)
+            dimensions: Additional dimensions
+        """
+        self.emit_metric(metric_name, value, unit=unit, dimensions=dimensions)
+
     def get_metrics_summary(self) -> Dict[str, Any]:
         """
         Get summary of collected metrics
@@ -240,7 +269,7 @@ class StructuredLogger:
     def log_event(self, event_type: str, details: Dict[str, Any],
                   level: str = 'INFO', table_name: Optional[str] = None):
         """
-        Log a structured event
+        Log a structured event with Dynatrace-enhanced fields
 
         Args:
             event_type: Event type (e.g., 'table_load_start', 'schema_change')
@@ -250,9 +279,12 @@ class StructuredLogger:
         """
         event = {
             'timestamp': datetime.utcnow().isoformat(),
+            'correlation_id': get_correlation_id(),  # For distributed tracing
             'job_name': self.job_name,
             'source_name': self.source_name,
             'event_type': event_type,
+            'environment': os.getenv('ENV', 'local'),  # Environment context
+            'severity': level,  # Dynatrace severity level
             'details': details
         }
 

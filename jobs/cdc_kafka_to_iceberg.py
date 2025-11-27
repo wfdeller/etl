@@ -10,6 +10,7 @@ import os
 import argparse
 import logging
 import json
+import base64
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -30,6 +31,8 @@ from status_tracker import CDCStatusTracker
 from schema_tracker import SchemaTracker
 from spark_utils import SparkSessionFactory
 from iceberg_utils import IcebergTableManager
+from monitoring import MetricsCollector, StructuredLogger
+from correlation import set_correlation_id, generate_correlation_id
 
 # Configure logging
 # For Databricks: use StreamHandler only (logs captured by driver)
@@ -98,11 +101,27 @@ def convert_timestamps_for_schema(data: Dict, schema: StructType) -> Dict:
                 logger.warning(f"Could not convert timestamp for {field_name}: {value} - {e}")
 
         # Convert DecimalType
-        elif isinstance(field.dataType, DecimalType) and isinstance(value, (int, float)):
-            try:
-                converted_data[field_name] = Decimal(str(value))
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Could not convert decimal for {field_name}: {value} - {e}")
+        elif isinstance(field.dataType, DecimalType):
+            if isinstance(value, (int, float)):
+                try:
+                    converted_data[field_name] = Decimal(str(value))
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Could not convert decimal for {field_name}: {value} - {e}")
+            elif isinstance(value, str):
+                # Handle base64-encoded values from Debezium (for Oracle RAW/BINARY types)
+                # Also handle numeric strings
+                try:
+                    # Try to decode as base64 first
+                    decoded = base64.b64decode(value)
+                    # Convert bytes to numeric value
+                    converted_data[field_name] = Decimal(str(int.from_bytes(decoded, byteorder='big', signed=True)))
+                except Exception:
+                    # If base64 decode fails, try to parse as string number
+                    try:
+                        converted_data[field_name] = Decimal(value)
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Could not convert decimal for {field_name}: {value} - {e}, setting to None")
+                        converted_data[field_name] = None
 
     return converted_data
 
@@ -417,10 +436,14 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
         schema_tracker: Optional schema tracker for detecting schema changes
         batch_size: Number of messages to process per batch
     """
-    
+
     namespace = source_config['iceberg_namespace']
     topic_prefix = source_config['kafka_topic_prefix']
     db_type = source_config['database_type']
+
+    # Initialize metrics collector for CDC monitoring
+    metrics = MetricsCollector(job_name='cdc_consumer', source_name=namespace)
+    structured_logger = StructuredLogger(job_name='cdc_consumer', source_name=namespace)
 
     # Extract source_db identifier for schema tracking (extract host from JDBC URL)
     jdbc_url = source_config['database_connection'].get('url', '')
@@ -444,8 +467,16 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
     def process_batch(batch_df, batch_id):
         """Process each micro-batch"""
 
+        # Generate correlation ID for this batch
+        set_correlation_id(generate_correlation_id())
+
         if batch_df.isEmpty():
             return
+
+        # Track batch processing time and metrics
+        import time as time_module
+        batch_start_time = time_module.time()
+        processing_timestamp_ms = int(batch_start_time * 1000)
 
         logger.info(f"Processing batch {batch_id} with {batch_df.count()} messages")
 
@@ -460,6 +491,7 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
         events_processed = 0
         events_skipped = 0
         new_tables_created = 0
+        max_lag_seconds = 0.0
 
         for msg in messages:
             try:
@@ -481,12 +513,19 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
                 before = payload.get('before')
                 after = payload.get('after')
 
-                # Extract source SCN/LSN
+                # Extract source SCN/LSN and timestamp
                 source_info = payload.get('source', {})
                 event_scn = source_info.get('scn') or source_info.get('lsn')
                 # Convert to int if it's a string (Debezium may send large numbers as strings)
                 if event_scn and isinstance(event_scn, str):
                     event_scn = int(event_scn)
+
+                # Calculate CDC lag from Debezium timestamp
+                event_timestamp_ms = source_info.get('ts_ms')
+                if event_timestamp_ms:
+                    lag_ms = processing_timestamp_ms - event_timestamp_ms
+                    lag_seconds = max(0, lag_ms / 1000.0)  # Ensure non-negative
+                    max_lag_seconds = max(max_lag_seconds, lag_seconds)
 
                 # Check if this is a known table
                 is_new_table = table_name not in get_known_tables_cache()
@@ -523,7 +562,44 @@ def process_kafka_batch(spark: SparkSession, iceberg_mgr: IcebergTableManager, k
                 logger.error(f"Error processing message from {topic}: {e}")
                 continue
 
-        logger.info(f"Batch {batch_id}: processed {events_processed}, skipped {events_skipped}, new tables {new_tables_created}")
+        # Calculate batch metrics
+        batch_duration = time_module.time() - batch_start_time
+        throughput = events_processed / batch_duration if batch_duration > 0 else 0
+
+        # Emit CDC metrics
+        if max_lag_seconds > 0:
+            metrics.emit_gauge('cdc_lag_seconds', max_lag_seconds,
+                             unit='Seconds',
+                             dimensions={'namespace': namespace})
+
+        metrics.emit_gauge('cdc_throughput_records_per_sec', throughput,
+                         unit='Count/Second',
+                         dimensions={'namespace': namespace})
+
+        metrics.emit_gauge('cdc_batch_processing_time', batch_duration,
+                         unit='Seconds',
+                         dimensions={'namespace': namespace})
+
+        metrics.emit_counter('cdc_events_processed', count=events_processed,
+                           dimensions={'namespace': namespace})
+
+        metrics.emit_counter('cdc_events_skipped', count=events_skipped,
+                           dimensions={'namespace': namespace})
+
+        # Log structured batch completion event
+        structured_logger.log_event('cdc_batch_complete', {
+            'batch_id': batch_id,
+            'events_processed': events_processed,
+            'events_skipped': events_skipped,
+            'new_tables_created': new_tables_created,
+            'batch_duration_seconds': batch_duration,
+            'throughput_records_per_sec': throughput,
+            'max_lag_seconds': max_lag_seconds
+        })
+
+        logger.info(f"Batch {batch_id}: processed {events_processed}, skipped {events_skipped}, "
+                   f"new tables {new_tables_created}, throughput {throughput:.1f} rec/s, "
+                   f"max lag {max_lag_seconds:.1f}s")
     
 
 

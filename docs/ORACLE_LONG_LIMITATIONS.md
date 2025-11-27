@@ -72,10 +72,10 @@ Example from test database (1373 tables total):
 - **91 tables** (6.6%) have LONG columns
 - Common LONG column names: `NOTE`, `COMMENTS`, `TEXT`, `SCRIPT`, `DESCRIPTION`
 - Examples:
-  - `EIM_ACT_DTL.NOTE`
-  - `EIM_ACCNT_DTL.NOTE_NOTE`
-  - `S_COMMUNICATION.TEXT`
-  - `S_APPLET_SCRIPT.SCRIPT`
+  - `ACTIVITY_DETAILS.NOTE`
+  - `ACCOUNT_DETAILS.NOTE_TEXT`
+  - `COMMUNICATIONS.TEXT`
+  - `SCRIPT_DEFINITIONS.SCRIPT`
 
 ## Impact Assessment
 

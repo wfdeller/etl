@@ -225,10 +225,17 @@ class SparkSessionFactory:
 
     @staticmethod
     def _add_performance_config(builder: SparkSession.builder) -> None:
-        """Add performance tuning configuration"""
+        """Add performance tuning and metrics configuration"""
+        # Performance tuning
         builder.config("spark.sql.adaptive.enabled", "true")
         builder.config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         builder.config("spark.driver.maxResultSize", "2g")
         builder.config("spark.rpc.message.maxSize", "256")
         builder.config("spark.network.timeout", "600s")
         builder.config("spark.executor.heartbeatInterval", "60s")
+
+        # Metrics configuration for Dynatrace OneAgent
+        # Enables JMX metrics that OneAgent can scrape automatically
+        builder.config("spark.metrics.conf.*.sink.jmx.class",
+                      "org.apache.spark.metrics.sink.JmxSink")
+        builder.config("spark.metrics.namespace", "${spark.app.name}")

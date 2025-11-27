@@ -14,7 +14,7 @@ This is a production-grade ETL pipeline that extracts data from transactional da
 │                         SOURCE SYSTEMS                           │
 │  ┌──────────────────┐              ┌──────────────────┐         │
 │  │  Oracle Database │              │ PostgreSQL DB    │         │
-│  │  (Siebel, etc)   │              │  (Aurora, etc)   │         │
+│  │  (any schema)    │              │  (Aurora, etc)   │         │
 │  └────────┬─────────┘              └────────┬─────────┘         │
 │           │                                 │                    │
 └───────────┼─────────────────────────────────┼────────────────────┘
@@ -43,7 +43,7 @@ This is a production-grade ETL pipeline that extracts data from transactional da
 │  │           (file://, s3://, dbfs://)                        │  │
 │  │                                                             │  │
 │  │  Namespaces:                                                │  │
-│  │    • {catalog}.bronze.siebel (Oracle tables)               │  │
+│  │    • {catalog}.bronze.mydb (Oracle tables)               │  │
 │  │    • {catalog}.bronze.aurora_db1 (Postgres tables)         │  │
 │  │    • {catalog}.bronze.*._cdc_status (Status tracking)      │  │
 │  └────────────────────────────────────────────────────────────┘  │
@@ -155,7 +155,7 @@ etl/
 **Query Example**:
 ```sql
 SELECT table_name, change_type, change_timestamp, column_name
-FROM local.bronze.siebel._schema_changes
+FROM local.bronze.mydb._schema_changes
 WHERE change_timestamp > current_date() - INTERVAL 30 DAYS
 ORDER BY change_timestamp DESC;
 ```
@@ -443,29 +443,29 @@ spark.network.timeout: 600s
 
 ```bash
 # Full load
-python jobs/direct_bulk_load.py --source dev_siebel
+python jobs/direct_bulk_load.py --source dev_mydb
 
 # Filtered load
-python jobs/direct_bulk_load.py --source dev_siebel --table-filter "S_%"
+python jobs/direct_bulk_load.py --source dev_mydb --table-filter "S_%"
 
 # Performance tuning
 python jobs/direct_bulk_load.py \
-  --source dev_siebel \
+  --source dev_mydb \
   --parallel-tables 16 \
   --parallel-workers 8
 
 # Force reload (no checkpoint)
-python jobs/direct_bulk_load.py --source dev_siebel --no-resume
+python jobs/direct_bulk_load.py --source dev_mydb --no-resume
 ```
 
 ### Running CDC Consumer
 
 ```bash
 # Standard run
-python jobs/cdc_kafka_to_iceberg.py --source dev_siebel
+python jobs/cdc_kafka_to_iceberg.py --source dev_mydb
 
 # Higher throughput
-python jobs/cdc_kafka_to_iceberg.py --source dev_siebel --batch-size 5000
+python jobs/cdc_kafka_to_iceberg.py --source dev_mydb --batch-size 5000
 
 # Using Spark submit
 spark-submit \
@@ -473,20 +473,20 @@ spark-submit \
   --deploy-mode cluster \
   --driver-memory 4g \
   --executor-memory 8g \
-  jobs/cdc_kafka_to_iceberg.py --source dev_siebel
+  jobs/cdc_kafka_to_iceberg.py --source dev_mydb
 ```
 
 ### Validating Data
 
 ```bash
 # List all tables with row counts
-python jobs/validate_iceberg_tables.py --source dev_siebel
+python jobs/validate_iceberg_tables.py --source dev_mydb
 
 # Hide empty tables
-python jobs/validate_iceberg_tables.py --source dev_siebel --hide-empty
+python jobs/validate_iceberg_tables.py --source dev_mydb --hide-empty
 
 # Check for missing tables
-python jobs/validate_iceberg_tables.py --source dev_siebel --no-check-missing
+python jobs/validate_iceberg_tables.py --source dev_mydb --no-check-missing
 ```
 
 ## Disaster Recovery
@@ -512,29 +512,29 @@ python jobs/validate_iceberg_tables.py --source dev_siebel --no-check-missing
 tail -f logs/direct_load.log
 
 # Check status table
-spark-sql -e "SELECT * FROM {catalog}.bronze.siebel._cdc_status WHERE load_status = 'failed'"
+spark-sql -e "SELECT * FROM {catalog}.bronze.mydb._cdc_status WHERE load_status = 'failed'"
 
 # Resume from checkpoint
-python jobs/direct_bulk_load.py --source dev_siebel
+python jobs/direct_bulk_load.py --source dev_mydb
 ```
 
 **Scenario 2: CDC Consumer Crash**
 ```bash
 # Check checkpoint exists (path configured via $CHECKPOINT_PATH)
-ls checkpoints/bronze.siebel/
-# Or for cloud: aws s3 ls s3://bucket/checkpoints/bronze.siebel/
+ls checkpoints/bronze.mydb/
+# Or for cloud: aws s3 ls s3://bucket/checkpoints/bronze.mydb/
 
 # Restart consumer (auto-resumes)
-python jobs/cdc_kafka_to_iceberg.py --source dev_siebel
+python jobs/cdc_kafka_to_iceberg.py --source dev_mydb
 ```
 
 **Scenario 3: Corrupted Status Table**
 ```bash
 # Drop and recreate (resets all state)
-spark-sql -e "DROP TABLE local.bronze.siebel._cdc_status"
+spark-sql -e "DROP TABLE local.bronze.mydb._cdc_status"
 
 # Rerun bulk load (will recreate status table)
-python jobs/direct_bulk_load.py --source dev_siebel --no-resume
+python jobs/direct_bulk_load.py --source dev_mydb --no-resume
 ```
 
 **Scenario 4: Lost Checkpoint Directory**

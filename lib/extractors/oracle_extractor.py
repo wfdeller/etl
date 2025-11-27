@@ -111,14 +111,19 @@ class OracleTableExtractor(BaseTableExtractor):
         """Build optimized Oracle query with SCN flashback
 
         Note: Always includes ROWID pseudo-column for use as fallback primary key
+        Oracle syntax: AS OF SCN must come before any table alias
         """
 
         if exclude_long_columns:
             columns = self.get_non_long_columns(table_name)
             column_list = ", ".join(columns)
-            base = f"SELECT {column_list}, ROWID FROM {self.schema}.{table_name}"
+            # Cast ROWID to VARCHAR to ensure Spark treats it as StringType
+            base = f"SELECT {column_list}, CAST(ROWID AS VARCHAR(18)) AS ROWID FROM {self.schema}.{table_name}"
         else:
-            base = f"SELECT t.*, ROWID FROM {self.schema}.{table_name} t"
+            # Qualify * with table name to avoid ambiguity with ROWID pseudo-column
+            # Can't use alias because AS OF SCN must come before alias in Oracle
+            # Cast ROWID to VARCHAR to ensure Spark treats it as StringType
+            base = f"SELECT {table_name}.*, CAST(ROWID AS VARCHAR(18)) AS ROWID FROM {self.schema}.{table_name}"
 
         if scn:
             base += f" AS OF SCN {scn}"
